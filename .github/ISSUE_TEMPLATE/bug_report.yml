@@ -1,0 +1,47 @@
+name: Bug report
+description: Something Kensa does is wrong or broken.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run kensa in a repo
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding agent, if one was involved
+      options:
+        - None
+        - Grok
+        - Claude
+        - Cursor
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kensa version or commit
+      placeholder: main, or a version number
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15
+    validations:
+      required: true

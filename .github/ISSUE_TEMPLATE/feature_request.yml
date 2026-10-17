@@ -1,0 +1,33 @@
+name: Feature request
+description: A change to what Kensa does.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or missing when you review code today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Kensa do? Mention if this changes docs/scope.md.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Review page
+        - Editing and saving
+        - Jumping around the repo
+        - Agent bridge
+        - Pull request submit
+        - Install and project setup
+        - Other
+    validations:
+      required: true
