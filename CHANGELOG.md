@@ -11,4 +11,7 @@ once it ships releases.
 ### Added
 
 - Open source repository: MIT license, contributing guide, code of conduct, security policy, and issue templates.
-- Product scope in `docs/scope.md`. The review app is not implemented yet.
+- Local review server and browser page: full-file view, diff highlights, edit and save, line comments, hunk marks, quick open, outline, and symbol jump.
+- `.kensa/open.md` for any coding agent, plus an MCP server with `review_open`, `review_comments`, and `review_status`.
+- `kensa setup` registers that MCP server with the agents it finds.
+- `kensa pr <number>` loads a GitHub pull request and can submit one review through `gh`.

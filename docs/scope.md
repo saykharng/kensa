@@ -1,6 +1,6 @@
 # Kensa scope
 
-This is the product that the repository is building. The app is not implemented yet. A change to behavior should update this file.
+This is the product the repository is building. Version 0.1 implements the local review loop below. A change to behavior should update this file.
 
 ## Product
 
@@ -33,7 +33,7 @@ Version 1 does not run a language server. One can be added later.
 Two doors, same comments:
 
 - `.kensa/open.md` in the repository under review, which any agent can read. Kensa gitignores that path in the repository it is reviewing so the notes are not committed by accident.
-- An MCP server in the same process, with `review_open`, `review_comments`, and `review_status`.
+- An MCP server, `kensa mcp`, with `review_open`, `review_comments`, and `review_status`. It reads the same review files as the browser.
 
 The installer registers that MCP server with every agent it finds. **Send** is how the next agent turn picks up the comments. **Hold** keeps the person on the current diff until they send.
 
@@ -47,7 +47,8 @@ Review state for the app itself lives in `~/.kensa/<repo>/`, not in the reposito
 
 A full editor, a language server, a terminal, a package of per-agent hooks, telemetry, and a second GitHub website.
 
-## Open decisions
+## Implementation
 
-- Implementation language for the server and the symbol index.
-- The TCP port for the local server.
+- Python 3.11 or newer, standard library only. The page is static HTML, CSS, and JavaScript served by that process.
+- The server listens on `127.0.0.1:4317`.
+- Symbol jump is a repository search with declaration lines ranked first. There is no language server.

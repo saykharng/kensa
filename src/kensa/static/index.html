@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kensa</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Kensa</div>
+    <div id="repo-name" class="repo-name"></div>
+    <div class="header-actions">
+      <button type="button" id="back" disabled>Back</button>
+      <button type="button" id="edit">Edit</button>
+      <button type="button" id="save" hidden>Save</button>
+      <button type="button" id="cancel-edit" hidden>Cancel</button>
+      <button type="button" id="hold">Hold</button>
+      <button type="button" id="send">Send</button>
+    </div>
+  </header>
+  <div id="pr-bar" class="pr-bar" hidden>
+    <div id="pr-title"></div>
+    <label>Verdict
+      <select id="verdict">
+        <option value="COMMENT">Comment</option>
+        <option value="REQUEST_CHANGES">Request changes</option>
+        <option value="APPROVE">Approve</option>
+      </select>
+    </label>
+    <input id="summary" type="text" placeholder="Summary for the pull request">
+    <button type="button" id="submit-pr">Submit review</button>
+  </div>
+  <p id="notice" class="notice" hidden></p>
+  <div id="app">
+    <aside id="sidebar">
+      <label class="search-label">Files
+        <input id="file-search" type="search" placeholder="Quick open" autocomplete="off">
+      </label>
+      <ul id="search-results" class="search-results"></ul>
+      <h2 id="list-heading">Changes</h2>
+      <ul id="file-list" class="file-list"></ul>
+    </aside>
+    <main id="main">
+      <div id="file-bar" class="file-bar" hidden>
+        <span id="file-path"></span>
+        <span id="file-flag" class="flag" hidden>Context</span>
+        <label>In this file
+          <select id="outline"></select>
+        </label>
+        <form id="jump-form">
+          <input id="jump-symbol" type="text" placeholder="Jump to symbol" autocomplete="off">
+          <button type="submit">Jump</button>
+        </form>
+      </div>
+      <div id="editor-wrap" hidden>
+        <textarea id="editor" spellcheck="false"></textarea>
+      </div>
+      <div id="code" class="code"></div>
+    </main>
+    <aside id="comments">
+      <h2>Comments</h2>
+      <form id="comment-form">
+        <p id="comment-target">Select a line.</p>
+        <label>Severity
+          <select id="severity">
+            <option value="bug">bug</option>
+            <option value="suggestion" selected>suggestion</option>
+            <option value="nit">nit</option>
+          </select>
+        </label>
+        <textarea id="comment-body" rows="4" placeholder="What should change?"></textarea>
+        <button type="submit">Add comment</button>
+      </form>
+      <ul id="comment-list" class="comment-list"></ul>
+    </aside>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

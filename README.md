@@ -2,7 +2,7 @@
 
 Local code review in a browser tab. Kensa watches a git repo while an agent writes code, and lets you read the whole changed file, comment, edit, and send that review back. It is meant to work with Grok, Claude, Cursor, and any other coding agent.
 
-**Status:** the repository is public and the product scope is locked. The review server and page are not implemented yet, so there is nothing to install.
+**Status:** version 0.1 runs locally. It can review the working tree, edit a file, comment, and hand that review to an agent. Opening a GitHub pull request needs `gh auth login`. The public GitHub repository is not created yet.
 
 ## What it is for
 
@@ -16,11 +16,36 @@ Keep a browser tab open instead of an IDE.
 
 Kensa is a local program. Review notes and GitHub credentials stay on your machine. The app does not phone home.
 
+## Run
+
+Requires Python 3.11 or newer and `git`. No extra packages.
+
+```bash
+python3 bin/kensa
+```
+
+That starts the server on `127.0.0.1:4317` if it is not already running, and opens this repository in a browser tab.
+
+```bash
+python3 bin/kensa pr 123
+python3 bin/kensa setup
+```
+
+`setup` writes a Kensa MCP server into this repo's `.mcp.json` and `.cursor/mcp.json`, and into the agent configs it finds under your home directory. The tools are `review_open`, `review_comments`, and `review_status`.
+
+Press **Send** to write `.kensa/open.md`. Kensa adds `.kensa/` to `.git/info/exclude` so that file is not committed. Review state stays in `~/.kensa/`.
+
+```bash
+PYTHONPATH=src python3 -m unittest
+```
+
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `docs/scope.md` | Locked product scope |
+| `bin/kensa` | Command |
+| `src/kensa/` | Server, review, and MCP |
+| `docs/scope.md` | Product scope |
 | `CONTRIBUTING.md` | How to suggest a change |
 | `CODE_OF_CONDUCT.md` | Community standards |
 | `SECURITY.md` | How to report a vulnerability |
@@ -28,7 +53,7 @@ Kensa is a local program. Review notes and GitHub credentials stay on your machi
 
 ## Contributing
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md) before opening a pull request. Product behavior belongs in [docs/scope.md](docs/scope.md) until the app exists.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md) before opening a pull request. A behavior change should update [docs/scope.md](docs/scope.md).
 
 ## Security
 

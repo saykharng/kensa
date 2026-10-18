@@ -6,7 +6,7 @@ Thanks for helping. Kensa is open source under the MIT license, and this file is
 
 Read [docs/scope.md](docs/scope.md). That file is the product until the app exists. A pull request that changes behavior should update it in the same pull request.
 
-The review server and page are not implemented yet. Issues and pull requests about the scope, docs, and project setup are welcome. Please open an issue before a large code change so the approach can be agreed.
+Please open an issue before a large change so the approach can be agreed.
 
 ## How to send a change
 
@@ -31,4 +31,10 @@ By submitting a contribution, you agree that it is licensed under the MIT licens
 
 ## Tests
 
-There is no test suite yet. When one exists, a behavior change needs a test run recorded in the pull request.
+From the repository root:
+
+```bash
+PYTHONPATH=src python3 -m unittest
+```
+
+A behavior change needs this run recorded in the pull request. Python 3.11 or newer is required. There are no third-party packages.

@@ -1,0 +1,26 @@
+[project]
+name = "kensa"
+version = "0.1.0"
+description = "Local code review in a browser tab, beside any coding agent."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Shekhar Gyanwali" }]
+keywords = ["code-review", "git", "mcp"]
+
+[project.scripts]
+kensa = "kensa.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/saykharng/kensa"
+Issues = "https://github.com/saykharng/kensa/issues"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kensa = ["static/*"]
