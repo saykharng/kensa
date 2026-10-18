@@ -211,6 +211,92 @@ def _decode_blob(data):
     return data.decode("utf-8", errors="replace"), False
 
 
+def resolve_branch(root, name):
+    """Return a git revision for a local branch or origin/name."""
+    if not _valid_branch_name(name):
+        raise RepoError("branch name is not valid")
+    for candidate in (name, f"origin/{name}"):
+        proc = _git(root, ["rev-parse", "--verify", "--quiet", candidate], check=False)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return candidate
+    raise RepoError(f"branch {name} was not found")
+
+
+def default_base(root):
+    """The branch a review is compared with. Prefers origin's default branch."""
+    proc = _git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+    for name in ("main", "master"):
+        proc = _git(root, ["rev-parse", "--verify", "--quiet", name], check=False)
+        if proc.returncode == 0:
+            return name
+    raise RepoError("could not find a base branch such as main")
+
+
+def branch_overview(root, name):
+    """Files changed on a branch since it diverged from the base branch."""
+    resolved = resolve_branch(root, name)
+    base = default_base(root)
+    proc = _git(root, ["diff", "-M", "--name-status", "-z", f"{base}...{resolved}"])
+    files = []
+    seen = set()
+    for status, path, old_path in parse_name_status_z(proc.stdout):
+        if path in seen:
+            continue
+        seen.add(path)
+        files.append({"path": path, "status": status, "oldPath": old_path})
+    files.sort(key=lambda item: item["path"])
+    tip = _git(root, ["rev-parse", resolved]).stdout.strip()
+    return {
+        "name": name,
+        "resolved": resolved,
+        "base": base,
+        "baseLabel": base[len("origin/") :] if base.startswith("origin/") else base,
+        "checkedOut": head_sha(root) == tip,
+        "files": files,
+    }
+
+
+def branch_hunks(root, base, resolved, relative):
+    proc = _git(
+        root,
+        ["diff", "-M", "-U3", f"{base}...{resolved}", "--", relative],
+        check=False,
+    )
+    parsed = parse_unified_diff(proc.stdout)
+    for item in parsed:
+        if item["new_path"] == relative or item["old_path"] == relative:
+            return item["hunks"]
+    if parsed:
+        return parsed[0]["hunks"]
+    return []
+
+
+def show_ref_text(root, ref, relative):
+    """Return (text, binary) for a file at a git revision."""
+    safe_path(root, relative)
+    proc = subprocess.run(
+        ["git", "show", f"{ref}:{relative}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise RepoError(message or "could not read that file on the branch")
+    return _decode_blob(proc.stdout)
+
+
+def _valid_branch_name(name):
+    if not name or name.startswith("-") or name.startswith("/"):
+        return False
+    if any(part in ("", ".", "..") for part in name.split("/")):
+        return False
+    forbidden = set(" \n\t~^:?*[\\")
+    return not any(char in forbidden for char in name)
+
+
 def _git(cwd, args, check=True):
     proc = subprocess.run(
         ["git", *args],

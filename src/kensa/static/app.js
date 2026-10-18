@@ -1,6 +1,6 @@
 const state = {
   repo: "",
-  pr: "",
+  branch: "",
   pollMs: 1000,
   hold: false,
   changes: [],
@@ -11,7 +11,7 @@ const state = {
   dirty: false,
   stack: [],
   selectedLine: null,
-  prMeta: null,
+  branchMeta: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -19,7 +19,7 @@ const $ = (id) => document.getElementById(id);
 function query() {
   const params = new URLSearchParams(window.location.search);
   state.repo = params.get("repo") || "";
-  state.pr = params.get("pr") || "";
+  state.branch = params.get("branch") || "";
 }
 
 function repoQuery() {
@@ -65,17 +65,17 @@ async function boot() {
   try {
     const health = await api("/api/health");
     state.pollMs = health.pollMs || state.pollMs;
-    if (state.pr) {
-      state.prMeta = await api("/api/pr?" + repoQuery() + "&number=" + encodeURIComponent(state.pr));
-      showPullRequest();
+    if (state.branch) {
+      state.branchMeta = await api("/api/branch?" + repoQuery() + "&name=" + encodeURIComponent(state.branch));
+      showBranch();
     }
     await refresh();
-    const first = state.pr ? (state.prMeta.files[0] || {}).path : (state.changes[0] || {}).path;
+    const first = state.branch ? (state.branchMeta.files[0] || {}).path : (state.changes[0] || {}).path;
     if (first) {
       await openPath(first, null, false);
     } else {
-      $("code").innerHTML = "";
-      $("code").append(el("p", "empty", state.pr ? "This pull request has no files." : "No changes against HEAD."));
+      $("code").replaceChildren();
+      $("code").append(el("p", "empty", state.branch ? "This branch matches " + state.branchMeta.baseLabel + "." : "No changes against HEAD."));
     }
   } catch (error) {
     notice(error.message);
@@ -86,12 +86,14 @@ async function boot() {
   bind();
 }
 
-function showPullRequest() {
+function showBranch() {
   const bar = $("pr-bar");
   bar.hidden = false;
-  const meta = state.prMeta;
-  $("pr-title").textContent = "PR #" + meta.number + " " + meta.title + (meta.checkedOut ? " · checked out" : " · read only");
-  $("list-heading").textContent = "Pull request";
+  const meta = state.branchMeta;
+  const access = meta.checkedOut ? "checked out" : "read only";
+  $("pr-title").textContent = meta.name + " compared with " + meta.baseLabel + " · " + access;
+  $("list-heading").textContent = "Branch";
+  $("submit-controls").hidden = !meta.pullRequest;
 }
 
 async function refresh() {
@@ -99,7 +101,7 @@ async function refresh() {
   state.hold = snap.hold;
   state.comments = snap.comments;
   state.hunks = snap.hunks;
-  if (!state.pr) {
+  if (!state.branch) {
     state.changes = snap.changes;
   }
   $("hold").textContent = state.hold ? "Holding" : "Hold";
@@ -115,7 +117,7 @@ async function refresh() {
     return;
   }
   const current = state.changes.find((item) => item.path === state.file.path);
-  if (!state.pr && current && current.hash && current.hash !== state.file.hash) {
+  if (!state.branch && current && current.hash && current.hash !== state.file.hash) {
     await openPath(state.file.path, state.selectedLine, false);
     state.viewSignature = signature;
     return;
@@ -135,9 +137,9 @@ async function refresh() {
 function renderSidebar() {
   const list = $("file-list");
   list.replaceChildren();
-  const rows = state.pr ? state.prMeta.files : state.changes;
+  const rows = state.branch ? state.branchMeta.files : state.changes;
   if (!rows.length) {
-    list.append(el("li", "meta", state.pr ? "No files in this diff." : "Working tree matches HEAD."));
+    list.append(el("li", "meta", state.branch ? "This branch matches " + state.branchMeta.baseLabel + "." : "Working tree matches HEAD."));
     return;
   }
   rows.forEach((item) => {
@@ -161,9 +163,9 @@ async function openPath(path, line, push) {
   if (push && state.file) {
     state.stack.push({ path: state.file.path, line: state.selectedLine });
   }
-  const inPullRequest = state.pr && state.prMeta && state.prMeta.files.some((item) => item.path === path);
-  const url = inPullRequest
-    ? "/api/pr/file?" + repoQuery() + "&number=" + encodeURIComponent(state.pr) + "&path=" + encodeURIComponent(path)
+  const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
+  const url = onBranch
+    ? "/api/branch/file?" + repoQuery() + "&name=" + encodeURIComponent(state.branch) + "&path=" + encodeURIComponent(path)
     : "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path);
   state.file = await api(url);
   state.editing = false;
@@ -507,8 +509,8 @@ function bind() {
   });
 
   $("submit-pr").addEventListener("click", () => {
-    post("/api/pr/submit", {
-      number: state.pr,
+    post("/api/branch/submit", {
+      name: state.branch,
       verdict: $("verdict").value,
       summary: $("summary").value,
     }).then((result) => {

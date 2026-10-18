@@ -198,6 +198,22 @@ class HttpTests(unittest.TestCase):
         with self.assertRaises(HTTPError):
             self.get("/api/file?repo=%s&path=../secret" % self.repo)
 
+    def test_branch_review(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 2\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "change"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "main"], **quiet)
+        info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(info["baseLabel"], "main")
+        self.assertFalse(info["checkedOut"])
+        self.assertEqual(info["files"][0]["path"], "src/app.py")
+        opened = self.get("/api/branch/file?repo=%s&name=feature&path=src/app.py" % self.repo)
+        self.assertIn("return 2", opened["content"])
+        self.assertFalse(opened["editable"])
+        self.assertTrue(any(row["kind"] == "add" for row in opened["rows"]))
+
     def test_quick_open_and_jump(self):
         files = self.get("/api/files?repo=%s&q=app.py" % self.repo)
         self.assertEqual(files["files"], ["src/app.py"])

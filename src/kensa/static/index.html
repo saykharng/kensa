@@ -21,15 +21,17 @@
   </header>
   <div id="pr-bar" class="pr-bar" hidden>
     <div id="pr-title"></div>
-    <label>Verdict
-      <select id="verdict">
-        <option value="COMMENT">Comment</option>
-        <option value="REQUEST_CHANGES">Request changes</option>
-        <option value="APPROVE">Approve</option>
-      </select>
-    </label>
-    <input id="summary" type="text" placeholder="Summary for the pull request">
-    <button type="button" id="submit-pr">Submit review</button>
+    <div id="submit-controls" hidden>
+      <label>Verdict
+        <select id="verdict">
+          <option value="COMMENT">Comment</option>
+          <option value="REQUEST_CHANGES">Request changes</option>
+          <option value="APPROVE">Approve</option>
+        </select>
+      </label>
+      <input id="summary" type="text" placeholder="Summary for the author">
+      <button type="button" id="submit-pr">Submit review</button>
+    </div>
   </div>
   <p id="notice" class="notice" hidden></p>
   <div id="app">

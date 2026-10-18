@@ -39,9 +39,9 @@ The installer registers that MCP server with every agent it finds. **Send** is h
 
 Review state for the app itself lives in `~/.kensa/<repo>/`, not in the repository under review.
 
-## Pull requests
+## Someone else's branch
 
-`kensa pr <number>` loads that pull request's diff into the same page. **Submit review** posts one GitHub review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. This needs `gh auth login` once on that machine.
+`kensa <branch>` loads the diff of that branch against the default branch, usually `main`. The command takes the branch name. When GitHub has an open pull request for that branch, **Submit review** posts one review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. Submitting needs `gh auth login` once on that machine.
 
 ## Out of scope for the first version
 

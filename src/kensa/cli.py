@@ -50,21 +50,21 @@ def _main(argv):
             print(note)
         return 0
     if command == "pr":
-        if len(argv) < 2 or not argv[1].isdigit():
-            print("usage: kensa pr <number>", file=sys.stderr)
-            return 1
-        _open_tab(Path.cwd(), pr=argv[1])
-        return 0
-    print(_help(), file=sys.stderr)
-    return 1
+        print("Pass a branch name. Example: kensa feature", file=sys.stderr)
+        return 1
+    if len(argv) != 1:
+        print(_help(), file=sys.stderr)
+        return 1
+    _open_tab(Path.cwd(), branch=command)
+    return 0
 
 
-def _open_tab(start, pr=None):
+def _open_tab(start, branch=None):
     root = discover(start)
     _ensure_server()
     query = f"repo={quote(str(root))}"
-    if pr:
-        query += f"&pr={quote(pr)}"
+    if branch:
+        query += f"&branch={quote(branch)}"
     url = f"http://{HOST}:{PORT}/?{query}"
     print(url)
     webbrowser.open(url)
@@ -118,8 +118,8 @@ def _help():
     return (
         "Kensa reviews code in a browser tab.\n"
         "\n"
-        "  kensa              Open this repository\n"
-        "  kensa pr <number>  Open a GitHub pull request\n"
+        "  kensa              Review your uncommitted changes\n"
+        "  kensa <branch>     Review that branch against the default branch\n"
         "  kensa setup        Register the MCP server with agents you have\n"
         "  kensa serve        Run the server in the foreground\n"
         "  kensa mcp          Speak MCP on stdin. Agents launch this.\n"

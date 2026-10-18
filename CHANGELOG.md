@@ -14,4 +14,4 @@ once it ships releases.
 - Local review server and browser page: full-file view, diff highlights, edit and save, line comments, hunk marks, quick open, outline, and symbol jump.
 - `.kensa/open.md` for any coding agent, plus an MCP server with `review_open`, `review_comments`, and `review_status`.
 - `kensa setup` registers that MCP server with the agents it finds.
-- `kensa pr <number>` loads a GitHub pull request and can submit one review through `gh`.
+- `kensa <branch>` reviews that branch against the default branch. If the branch has a GitHub pull request, Submit review posts it through `gh`.

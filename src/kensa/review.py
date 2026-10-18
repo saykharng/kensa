@@ -17,6 +17,8 @@ from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT
 from kensa.diff import hunk_anchors, render_document
 from kensa.gitrepo import (
     RepoError,
+    branch_hunks,
+    branch_overview,
     changed_files,
     content_hash,
     diff_hunks,
@@ -26,6 +28,7 @@ from kensa.gitrepo import (
     list_paths,
     safe_path,
     search_symbol,
+    show_ref_text,
     write_worktree_file,
 )
 from kensa.outline import outline, rank_hits
@@ -174,6 +177,59 @@ def jump(root, symbol):
     return rank_hits(symbol, hits)[:JUMP_LIMIT]
 
 
+def open_branch(root, name):
+    """Diff of a branch against the default branch, for reviewing someone else."""
+    from kensa.pull_request import find_pull_request
+
+    overview = branch_overview(Path(root), name)
+    overview["pullRequest"] = find_pull_request(Path(root), overview["resolved"])
+    return overview
+
+
+def open_branch_file(root, name, relative):
+    """Whole file at the branch tip, with that branch's diff highlighted."""
+    root = Path(root)
+    safe_path(root, relative)
+    overview = branch_overview(root, name)
+    known = next((item for item in overview["files"] if item["path"] == relative), None)
+    if known is None:
+        raise RepoError("that file did not change on this branch")
+    status = known["status"]
+    checked_out = overview["checkedOut"] and status != "D"
+    if checked_out:
+        text, binary = file_blob(root, relative, "M")
+        source = "worktree"
+    else:
+        ref = overview["base"] if status == "D" else overview["resolved"]
+        text, binary = show_ref_text(root, ref, relative)
+        source = "branch"
+    hunks = [] if binary else branch_hunks(root, overview["base"], overview["resolved"], relative)
+    editable = checked_out and not binary
+    document = _document(text, binary, hunks, status)
+    state = _state(root)
+    placed = [row for row in _place_all(root, state) if row["path"] == relative]
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest() if not binary else ""
+    return {
+        "path": relative,
+        "status": status,
+        "inReview": True,
+        "binary": binary,
+        "editable": editable,
+        "content": "" if binary else text,
+        "hash": digest,
+        "rows": document["rows"],
+        "deletions": document["deletions"],
+        "anchors": hunk_anchors(hunks),
+        "comments": placed,
+        "source": source,
+        "branch": {
+            "name": overview["name"],
+            "base": overview["baseLabel"],
+            "checkedOut": overview["checkedOut"],
+        },
+    }
+
+
 def open_pull_file(root, number, relative):
     """Same shape as open_file, using the pull request diff for highlights."""
     from kensa.pull_request import pull_request_file
@@ -230,6 +286,26 @@ def agent_view(root):
         "openMarkdown": written,
         "liveMarkdown": live,
     }
+
+
+def _document(text, binary, hunks, status):
+    if binary:
+        return {"rows": [], "deletions": []}
+    lines = text.splitlines()
+    if status == "D":
+        rows = [
+            {"num": index, "text": line, "kind": "del"}
+            for index, line in enumerate(lines, start=1)
+        ]
+        return {"rows": rows, "deletions": []}
+    if status == "A" and not hunks:
+        rows = [
+            {"num": index, "text": line, "kind": "add"}
+            for index, line in enumerate(lines, start=1)
+        ]
+        return {"rows": rows, "deletions": []}
+    rows, deletions = render_document(lines, hunks)
+    return {"rows": rows, "deletions": deletions}
 
 
 def _state(root):

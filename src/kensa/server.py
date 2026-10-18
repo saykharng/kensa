@@ -14,6 +14,8 @@ from kensa.review import (
     file_outline,
     jump,
     mark_hunk,
+    open_branch,
+    open_branch_file,
     open_file,
     open_pull_file,
     remove_comment,
@@ -121,6 +123,31 @@ class Handler(BaseHTTPRequestHandler):
             return
         if method == "GET" and path == "/api/jump":
             self._json({"hits": jump(root, _required(query, "symbol"))})
+            return
+        if method == "GET" and path == "/api/branch":
+            self._json(open_branch(root, _required(query, "name")))
+            return
+        if method == "GET" and path == "/api/branch/file":
+            self._json(
+                open_branch_file(root, _required(query, "name"), _required(query, "path"))
+            )
+            return
+        if method == "POST" and path == "/api/branch/submit":
+            from kensa.pull_request import find_pull_request, submit_pull_request
+            from kensa.review import agent_view
+
+            overview = open_branch(root, body.get("name") or "")
+            pull = overview.get("pullRequest") or find_pull_request(root, overview["resolved"])
+            if not pull:
+                raise RepoError("this branch has no GitHub pull request to submit")
+            result = submit_pull_request(
+                root,
+                pull["number"],
+                body.get("verdict", ""),
+                body.get("summary", ""),
+                agent_view(root)["comments"],
+            )
+            self._json(result)
             return
         if method == "GET" and path == "/api/pr":
             from kensa.pull_request import load_pull_request

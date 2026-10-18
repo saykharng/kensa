@@ -60,6 +60,37 @@ def split_inline_comments(diff_files, comments):
     return inline, overflow
 
 
+def find_pull_request(root, branch):
+    """Open GitHub pull request for a branch, if gh can see one."""
+    short = branch[len("origin/") :] if branch.startswith("origin/") else branch
+    try:
+        raw = _gh(
+            root,
+            [
+                "pr",
+                "list",
+                "--head",
+                short,
+                "--state",
+                "open",
+                "--json",
+                "number,title,url",
+                "--limit",
+                "1",
+            ],
+        )
+    except RepoError:
+        return None
+    try:
+        rows = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    return {"number": row.get("number"), "title": row.get("title") or "", "url": row.get("url") or ""}
+
+
 def load_pull_request(root, number):
     if not str(number).isdigit():
         raise RepoError("pull request number must be digits")
