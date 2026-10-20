@@ -15,7 +15,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Run kensa in a repo
+        1. Run kc in a repo
         2. ...
     validations:
       required: true

@@ -5,11 +5,14 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from kensa.cli import main as cli_main
 from kensa.comments import add_comment, empty_state, place_comment, render_open_md
+from kensa.constants import COMMAND
 from kensa.diff import (
     align_panes,
     hunk_anchors,
@@ -27,7 +30,7 @@ from kensa.pull_request import (
     split_inline_comments,
 )
 from kensa.server import serve_in_thread
-from kensa.setup_agents import install
+from kensa.setup_agents import install, install_command
 
 SAMPLE_DIFF = """diff --git a/src/app.py b/src/app.py
 index 1111111..2222222 100644
@@ -258,6 +261,55 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(outline_body["outline"][0]["name"], "answer")
         hits = self.get("/api/jump?repo=%s&symbol=answer" % self.repo)
         self.assertEqual(hits["hits"][0]["path"], "src/app.py")
+
+
+class CommandInstallTests(unittest.TestCase):
+    def test_setup_links_kc_and_refuses_a_different_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            source = Path(tmp) / "bin" / "kc"
+            source.parent.mkdir()
+            source.write_text("from kensa.cli import main\n", encoding="utf-8")
+            env = dict(os.environ)
+            env["KENSA_BIN"] = str(source)
+            env["PATH"] = "/usr/bin"
+            with patch.dict(os.environ, env, clear=True):
+                notes = install_command(home)
+            link = home / ".local" / "bin" / "kc"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.resolve(), source.resolve())
+            self.assertTrue((home / ".zshrc").is_file())
+            self.assertIn(".local/bin", (home / ".zshrc").read_text(encoding="utf-8"))
+            with patch.dict(os.environ, env, clear=True):
+                again = install_command(home)
+            self.assertEqual((home / ".zshrc").read_text(encoding="utf-8").count(".local/bin"), 1)
+            self.assertTrue(any("already" in note for note in again))
+            link.unlink()
+            link.write_text("#!/bin/sh\necho other\n", encoding="utf-8")
+            with patch.dict(os.environ, env, clear=True):
+                refused = install_command(home)
+            self.assertIn("other", link.read_text(encoding="utf-8"))
+            self.assertTrue(any("Another program" in note for note in refused))
+            self.assertTrue(any("installed" in note for note in notes))
+
+
+class CommandTests(unittest.TestCase):
+    def test_help_uses_kc(self):
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            code = cli_main(["--help"])
+        self.assertEqual(code, 0)
+        text = stdout.getvalue()
+        self.assertIn(f"{COMMAND} opens Kensa changes", text)
+        self.assertIn(f"{COMMAND} <branch>", text)
+        self.assertNotIn("kensa <branch>", text)
+
+    def test_pr_asks_for_a_branch(self):
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            code = cli_main(["pr"])
+        self.assertEqual(code, 1)
+        self.assertIn(f"{COMMAND} feature", stderr.getvalue())
 
 
 class McpTests(unittest.TestCase):

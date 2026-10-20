@@ -6,7 +6,7 @@ This is the product the repository is building. Version 0.1 implements the local
 
 Kensa is an open source local review tool. People install it once and use it beside whichever agent writes their code, including Grok, Claude, and Cursor. The installed program is a build of this repository.
 
-The interface is a browser tab. `kensa`, run in a repository, starts one local server if it is not already running and opens the tab. An IDE does not have to be open.
+The interface is a browser tab. The first install, from a checkout, is `python3 bin/kc setup`. That links `kc` onto `~/.local/bin` and registers the agent. If `~/.local/bin` is not on PATH, setup adds it in `~/.zshrc`. If a different `kc` is already installed, setup leaves that program in place. After that, `kc` in a repository starts one local server if it is not already running and opens the tab. An IDE does not have to be open. The command name is Kensa changes: it inspects the changes.
 
 ## Reviewing a change
 
@@ -33,7 +33,7 @@ Version 1 does not run a language server. One can be added later.
 Two doors, same comments:
 
 - `.kensa/open.md` in the repository under review, which any agent can read. Kensa gitignores that path in the repository it is reviewing so the notes are not committed by accident.
-- An MCP server, `kensa mcp`, with `review_open`, `review_comments`, and `review_status`. It reads the same review files as the browser.
+- An MCP server, `kc mcp`, with `review_open`, `review_comments`, and `review_status`. It reads the same review files as the browser.
 
 The installer registers that MCP server with every agent it finds. **Send** writes `.kensa/open.md` so the next agent turn can read the comments. **Hold** tells the agent to stop new edits until Hold is turned off.
 
@@ -41,7 +41,7 @@ Review state for the app itself lives in `~/.kensa/<repo>/`, not in the reposito
 
 ## Someone else's branch
 
-`kensa <branch>` loads the diff of that branch against the default branch, usually `main`. The command takes the branch name. When GitHub has an open pull request for that branch, **Submit review** posts one review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. Submitting needs `gh auth login` once on that machine.
+`kc <branch>` loads the diff of that branch against the default branch, usually `main`. The command takes the branch name. When GitHub has an open pull request for that branch, **Submit review** posts one review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. Submitting needs `gh auth login` once on that machine.
 
 ## Out of scope for the first version
 

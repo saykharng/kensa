@@ -9,7 +9,7 @@ authors = [{ name = "Shekhar Gyanwali" }]
 keywords = ["code-review", "git", "mcp"]
 
 [project.scripts]
-kensa = "kensa.cli:main"
+kc = "kensa.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/saykharng/kensa"

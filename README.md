@@ -6,16 +6,26 @@ Local code review in a browser tab. Kensa watches a git repo while an agent writ
 
 ## Start a review
 
-Review your own uncommitted changes. Kensa compares the working tree with the last commit and opens the browser.
+The command is `kc` (Kensa changes). It inspects the changes and opens the browser.
+
+Install it once, from a checkout of this repository. This is the only time the command is `python3 bin/kc`:
 
 ```bash
-python3 bin/kensa
+python3 bin/kc setup
+```
+
+That links `kc` into `~/.local/bin`. If that directory is not on your PATH, setup adds it in `~/.zshrc`, and you open a new terminal. If another program is already named `kc`, setup leaves it alone. After this, every command below is just `kc`.
+
+Review your own uncommitted changes. Kensa compares the working tree with the last commit.
+
+```bash
+kc
 ```
 
 Review someone else's branch. Pass the branch name. Kensa compares it with the default branch, usually `main`.
 
 ```bash
-python3 bin/kensa their-branch
+kc their-branch
 ```
 
 A bar shows `their-branch compared with main`. The file list is headed **Branch** and contains only files that branch changed. **read only** means that branch is not checked out, so you can read and comment. **checked out** means your current commit is the tip of that branch, so **Edit** and **Save** write your working tree.
@@ -84,17 +94,13 @@ The icon in the header switches the page. The moon turns on dark. The sun turns 
 
 ## Connect an agent
 
-```bash
-python3 bin/kensa setup
-```
-
-`setup` registers a Kensa MCP server with the agents it finds, including this repo's `.mcp.json` and `.cursor/mcp.json`. The tools are `review_open`, `review_comments`, and `review_status`. They read the same notes as the page. **Send** is how the next agent turn picks up the comments.
+`kc setup` is the same install command. Run it again from a repository when you want Kensa registered with the agents on this machine. It writes this repo's `.mcp.json` and `.cursor/mcp.json`, and the agent configs it finds. The tools are `review_open`, `review_comments`, and `review_status`. They read the same notes as the page. **Send** is how the next agent turn picks up the comments.
 
 ## Which review is which
 
 | | Your own changes | Someone else's branch |
 | --- | --- | --- |
-| Command | `python3 bin/kensa` | `python3 bin/kensa their-branch` |
+| Command | `kc` | `kc their-branch` |
 | File list | Files you have not committed | Files that branch changed since `main` |
 | Save | Writes your working tree | Writes your working tree only when that branch is checked out |
 | Send | `.kensa/open.md` for your agent | Same local file |
@@ -108,7 +114,7 @@ PYTHONPATH=src python3 -m unittest
 
 | Path | Purpose |
 | --- | --- |
-| `bin/kensa` | Command |
+| `bin/kc` | Command. `kc setup` links it onto your PATH. |
 | `src/kensa/` | Server, review, and MCP |
 | `docs/scope.md` | Product scope |
 | `CONTRIBUTING.md` | How to suggest a change |

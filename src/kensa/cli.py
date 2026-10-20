@@ -11,12 +11,12 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import quote
 
-from kensa.constants import HOST, PORT, SERVER_FILE, VERSION
+from kensa.constants import COMMAND, HOST, PORT, SERVER_FILE, VERSION
 from kensa.gitrepo import RepoError, discover
 from kensa.mcp_server import serve_stdio
 from kensa.paths import kensa_home
 from kensa.server import serve
-from kensa.setup_agents import install
+from kensa.setup_agents import install, install_command
 
 
 def main(argv=None):
@@ -46,11 +46,13 @@ def _main(argv):
         serve_stdio()
         return 0
     if command == "setup":
+        for note in install_command():
+            print(note)
         for note in install(discover(Path.cwd())):
             print(note)
         return 0
     if command == "pr":
-        print("Pass a branch name. Example: kensa feature", file=sys.stderr)
+        print(f"Pass a branch name. Example: {COMMAND} feature", file=sys.stderr)
         return 1
     if len(argv) != 1:
         print(_help(), file=sys.stderr)
@@ -116,12 +118,12 @@ def _help():
     if path.is_file():
         record = f"\nServer record: {path}"
     return (
-        "Kensa reviews code in a browser tab.\n"
+        f"{COMMAND} opens Kensa changes in a browser tab.\n"
         "\n"
-        "  kensa              Review your uncommitted changes\n"
-        "  kensa <branch>     Review that branch against the default branch\n"
-        "  kensa setup        Register the MCP server with agents you have\n"
-        "  kensa serve        Run the server in the foreground\n"
-        "  kensa mcp          Speak MCP on stdin. Agents launch this.\n"
+        f"  {COMMAND}                 Inspect uncommitted changes\n"
+        f"  {COMMAND} <branch>        Inspect that branch against the default branch\n"
+        f"  {COMMAND} setup           Install {COMMAND} and register it with agents you have\n"
+        f"  {COMMAND} serve           Run the server in the foreground\n"
+        f"  {COMMAND} mcp             Speak MCP on stdin. Agents launch this.\n"
         f"{record}"
     )

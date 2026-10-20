@@ -4,6 +4,9 @@ HOST = "127.0.0.1"
 PORT = 4317
 VERSION = "0.1.0"
 PRODUCT_NAME = "Kensa"
+COMMAND = "kc"
+USER_BIN = ".local/bin"
+PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
 
 HOME_ENV = "KENSA_HOME"
 HOME_DIR_NAME = ".kensa"

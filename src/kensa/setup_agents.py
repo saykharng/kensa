@@ -6,6 +6,74 @@ import shutil
 import sys
 from pathlib import Path
 
+from kensa.constants import COMMAND, PATH_LINE, USER_BIN
+
+LAUNCHER_MARK = "from kensa.cli import main"
+
+
+def install_command(home=None):
+    """Link kc into ~/.local/bin. Leave a different kc program where it is."""
+    home = Path(home) if home is not None else Path.home()
+    binary = os.environ.get("KENSA_BIN")
+    if not binary:
+        return [f"Run python3 bin/{COMMAND} setup from the Kensa checkout to install {COMMAND}."]
+    source = Path(binary).resolve()
+    bindir = home / USER_BIN
+    bindir.mkdir(parents=True, exist_ok=True)
+    target = bindir / COMMAND
+    if target.is_symlink() or target.exists():
+        if _our_command(target):
+            if target.is_symlink() and _link_matches(target, source):
+                notes = [f"{COMMAND} is already installed at {target}"]
+            else:
+                target.unlink()
+                target.symlink_to(source)
+                notes = [f"updated {COMMAND} at {target}"]
+        else:
+            return [f"left {target} alone. Another program is already named {COMMAND}."]
+    else:
+        target.symlink_to(source)
+        notes = [f"installed {COMMAND} at {target}"]
+    notes.extend(_ensure_user_bin_on_path(home, bindir))
+    return notes
+
+
+def _link_matches(target, source):
+    try:
+        return target.resolve() == source
+    except OSError:
+        return False
+
+
+def _our_command(path):
+    if path.is_symlink():
+        linked = Path(os.readlink(path))
+        if linked.name == COMMAND and "kensa" in str(linked):
+            return True
+    candidate = path
+    if path.is_symlink() and path.exists():
+        candidate = path.resolve()
+    if not candidate.is_file():
+        return False
+    try:
+        text = candidate.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return LAUNCHER_MARK in text
+
+
+def _ensure_user_bin_on_path(home, bindir):
+    directories = os.environ.get("PATH", "").split(os.pathsep)
+    if str(bindir) in directories:
+        return []
+    rc = home / ".zshrc"
+    existing = rc.read_text(encoding="utf-8") if rc.is_file() else ""
+    if USER_BIN in existing:
+        return [f"Open a new terminal so {bindir} is on PATH, then type {COMMAND}."]
+    prefix = "" if existing.endswith("\n") or existing == "" else "\n"
+    rc.write_text(existing + prefix + "\n# Kensa\n" + PATH_LINE + "\n", encoding="utf-8")
+    return [f"Added {bindir} to {rc}. Open a new terminal, then type {COMMAND}."]
+
 
 def agent_invocation():
     binary = os.environ.get("KENSA_BIN")
