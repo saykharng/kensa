@@ -11,7 +11,9 @@ from urllib.request import Request, urlopen
 
 from kensa.comments import add_comment, empty_state, place_comment, render_open_md
 from kensa.diff import (
+    align_panes,
     hunk_anchors,
+    old_lines_from_hunks,
     parse_name_status_z,
     parse_unified_diff,
     render_document,
@@ -66,6 +68,36 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(deletions[0]["text"], "    return 1")
         self.assertGreaterEqual(deletions[0]["before"], 1)
+
+    def test_align_panes_lines_up_a_replacement(self):
+        pairs = align_panes(
+            ["def answer():", "    return 1", "    # end"],
+            ["def answer():", "    return 2", "    # end"],
+        )
+        changed = [pair for pair in pairs if pair["kind"] == "change"]
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(changed[0]["oldText"], "    return 1")
+        self.assertEqual(changed[0]["newText"], "    return 2")
+        self.assertEqual(changed[0]["oldNum"], 2)
+        self.assertEqual(changed[0]["newNum"], 2)
+        self.assertEqual(pairs[0]["kind"], "context")
+
+    def test_align_panes_pads_the_shorter_side(self):
+        pairs = align_panes(["keep", "gone"], ["keep", "added", "extra"])
+        self.assertEqual(pairs[1]["kind"], "change")
+        self.assertEqual(pairs[1]["oldText"], "gone")
+        self.assertEqual(pairs[1]["newText"], "added")
+        self.assertEqual(pairs[2]["kind"], "add")
+        self.assertIsNone(pairs[2]["oldText"])
+        self.assertEqual(pairs[2]["newText"], "extra")
+
+    def test_old_lines_follow_the_hunk(self):
+        parsed = parse_unified_diff(SAMPLE_DIFF)
+        new_lines = ["def answer():", "    return 2", "    # end"]
+        self.assertEqual(
+            old_lines_from_hunks(new_lines, parsed[0]["hunks"]),
+            ["def answer():", "    return 1", "    # end"],
+        )
 
 
 class CommentTests(unittest.TestCase):
@@ -181,6 +213,9 @@ class HttpTests(unittest.TestCase):
         self.assertIn("return 2", opened["content"])
         self.assertTrue(any(row["kind"] == "add" for row in opened["rows"]))
         self.assertTrue(any(item["text"] == "    return 1" for item in opened["deletions"]))
+        changed = [pair for pair in opened["pairs"] if pair["oldText"] == "    return 1"]
+        self.assertEqual(changed[0]["newText"], "    return 2")
+        self.assertEqual(changed[0]["kind"], "change")
         self.send(
             "/api/comments",
             {"repo": str(self.root), "path": "src/app.py", "line": 2, "severity": "bug", "body": "restore the check"},
@@ -213,6 +248,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn("return 2", opened["content"])
         self.assertFalse(opened["editable"])
         self.assertTrue(any(row["kind"] == "add" for row in opened["rows"]))
+        changed = [pair for pair in opened["pairs"] if pair["oldText"] == "    return 1"]
+        self.assertEqual(changed[0]["newText"], "    return 2")
 
     def test_quick_open_and_jump(self):
         files = self.get("/api/files?repo=%s&q=app.py" % self.repo)

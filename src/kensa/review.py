@@ -14,7 +14,7 @@ from kensa.comments import (
     set_hunk,
 )
 from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT
-from kensa.diff import hunk_anchors, render_document
+from kensa.diff import align_panes, hunk_anchors, old_lines_from_hunks, render_document
 from kensa.gitrepo import (
     RepoError,
     branch_hunks,
@@ -83,6 +83,7 @@ def open_file(root, relative):
         rows, deletions = render_document(lines, hunks)
     placed = [row for row in _place_all(root, state) if row["path"] == relative]
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest() if not binary else ""
+    old_path = known.get("oldPath") if known else None
     return {
         "path": relative,
         "status": status,
@@ -93,6 +94,7 @@ def open_file(root, relative):
         "hash": digest,
         "rows": rows,
         "deletions": deletions,
+        "pairs": _pairs(root, relative, status, text, binary, old_path, "HEAD"),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
     }
@@ -219,6 +221,15 @@ def open_branch_file(root, name, relative):
         "hash": digest,
         "rows": document["rows"],
         "deletions": document["deletions"],
+        "pairs": _pairs(
+            root,
+            relative,
+            status,
+            text,
+            binary,
+            known.get("oldPath"),
+            overview["base"],
+        ),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
         "source": source,
@@ -251,6 +262,7 @@ def open_pull_file(root, number, relative):
         deletions = []
     placed = [row for row in _place_all(root, state) if row["path"] == relative]
     digest = hashlib.sha256(loaded["content"].encode("utf-8")).hexdigest() if not binary else ""
+    pairs = _pull_pairs(lines, binary, loaded)
     return {
         "path": relative,
         "status": "M",
@@ -261,6 +273,7 @@ def open_pull_file(root, number, relative):
         "hash": digest,
         "rows": rows,
         "deletions": deletions,
+        "pairs": pairs,
         "anchors": hunk_anchors(loaded["hunks"]),
         "comments": placed,
         "pullRequest": loaded["pullRequest"],
@@ -286,6 +299,42 @@ def agent_view(root):
         "openMarkdown": written,
         "liveMarkdown": live,
     }
+
+
+def _pairs(root, relative, status, text, binary, old_path, ref):
+    """Aligned old and new lines. Context shows the same text on both sides."""
+    if binary:
+        return []
+    if status == "D":
+        return align_panes(text.splitlines(), [])
+    if status == "A":
+        return align_panes([], text.splitlines())
+    if status == "context":
+        lines = text.splitlines()
+        return align_panes(lines, lines)
+    previous = _previous_blob(root, ref, old_path or relative)
+    return align_panes(previous.splitlines(), text.splitlines())
+
+
+def _previous_blob(root, ref, relative):
+    try:
+        text, binary = show_ref_text(root, ref, relative)
+    except RepoError:
+        return ""
+    if binary:
+        return ""
+    return text
+
+
+def _pull_pairs(lines, binary, loaded):
+    if binary:
+        return []
+    if loaded.get("newPath") is None:
+        return align_panes(lines, [])
+    if not loaded.get("oldPath"):
+        return align_panes([], lines)
+    previous = old_lines_from_hunks(lines, loaded["hunks"])
+    return align_panes(previous, lines)
 
 
 def _document(text, binary, hunks, status):

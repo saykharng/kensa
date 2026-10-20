@@ -6,8 +6,10 @@ from pathlib import Path
 
 from kensa.constants import (
     HUNK_CHANGE,
+    HUNK_CHANGE_LABEL,
     HUNK_MARKS,
     HUNK_OK,
+    HUNK_OK_LABEL,
     MAX_COMMENT_CHARS,
     SEVERITIES,
 )
@@ -127,7 +129,7 @@ def render_open_md(state, placed):
     if not state.get("hunks"):
         lines.append("- None.")
     for hunk in state["hunks"]:
-        label = "accepted" if hunk["mark"] == HUNK_OK else "change this"
+        label = HUNK_OK_LABEL if hunk["mark"] == HUNK_OK else HUNK_CHANGE_LABEL
         lines.append(f"- `{hunk['path']}` {label} — {hunk['header']}")
     lines.append("")
     return "\n".join(lines)

@@ -1,3 +1,24 @@
+const SIDEBAR_KEY = "kensa.sidebar.collapsed";
+const SIDEBAR_HIDE_LABEL = "Hide files";
+const SIDEBAR_SHOW_LABEL = "Show files";
+const THEME_KEY = "kensa.theme";
+const THEME_DARK = "dark";
+const THEME_BRIGHT = "bright";
+const THEME_DARK_LABEL = "Dark";
+const THEME_BRIGHT_LABEL = "Bright";
+const SEVERITY_BUG = "bug";
+const SEVERITY_SUGGESTION = "suggestion";
+const SEVERITY_NIT = "nit";
+const SEVERITIES = [SEVERITY_BUG, SEVERITY_SUGGESTION, SEVERITY_NIT];
+const COMMENT_PLACEHOLDER = "Comment";
+const COMMENT_SAVE = "Save";
+const COMMENT_CANCEL = "Cancel";
+const COMMENT_DISMISS = "Dismiss";
+const COMMENT_MOVED = "moved";
+const SEVERITY_LABEL = "Severity";
+const PANE_OLD = "old";
+const PANE_NEW = "new";
+
 const state = {
   repo: "",
   branch: "",
@@ -11,6 +32,7 @@ const state = {
   dirty: false,
   stack: [],
   selectedLine: null,
+  draft: null,
   branchMeta: null,
 };
 
@@ -56,6 +78,12 @@ function basename(path) {
 
 async function boot() {
   query();
+  applyTheme(readTheme());
+  $("theme-toggle").addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme");
+    applyTheme(current === THEME_DARK ? THEME_BRIGHT : THEME_DARK);
+  });
+  setSidebarCollapsed(readSidebarCollapsed());
   if (!state.repo) {
     notice("Open a repository with the kensa command.");
     return;
@@ -105,6 +133,8 @@ async function refresh() {
     state.changes = snap.changes;
   }
   $("hold").textContent = state.hold ? "Holding" : "Hold";
+  $("hold").classList.toggle("is-holding", state.hold);
+  $("hold").setAttribute("aria-pressed", state.hold ? "true" : "false");
   renderSidebar();
   const signature = JSON.stringify({
     comments: state.comments,
@@ -112,7 +142,6 @@ async function refresh() {
   });
   const commentsChanged = signature !== state.viewSignature;
   if (!state.file || state.dirty || state.editing) {
-    renderComments();
     state.viewSignature = signature;
     return;
   }
@@ -123,13 +152,10 @@ async function refresh() {
     return;
   }
   if (commentsChanged) {
-    const main = $("main");
-    const top = main.scrollTop;
+    const scroller = $("code");
+    const top = scroller.scrollTop;
     renderFile();
-    renderComments();
-    main.scrollTop = top;
-  } else {
-    renderComments();
+    scroller.scrollTop = top;
   }
   state.viewSignature = signature;
 }
@@ -145,11 +171,25 @@ function renderSidebar() {
   rows.forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
-    if (state.file && state.file.path === item.path) {
-      button.className = "active";
-    }
+    button.className = state.file && state.file.path === item.path ? "active" : "";
+    button.title = item.path;
     const count = state.comments.filter((comment) => comment.path === item.path).length;
-    button.textContent = (item.status ? item.status + " " : "") + item.path + (count ? " (" + count + ")" : "");
+    if (item.status) {
+      const status = document.createElement("span");
+      status.className = "status status-" + item.status;
+      status.textContent = item.status;
+      button.append(status);
+    }
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = item.path;
+    button.append(name);
+    if (count) {
+      const mark = document.createElement("span");
+      mark.className = "count";
+      mark.textContent = String(count);
+      button.append(mark);
+    }
     button.addEventListener("click", () => {
       openPath(item.path, null, true).catch((error) => notice(error.message));
     });
@@ -163,6 +203,9 @@ async function openPath(path, line, push) {
   if (push && state.file) {
     state.stack.push({ path: state.file.path, line: state.selectedLine });
   }
+  if (!state.file || state.file.path !== path) {
+    state.draft = null;
+  }
   const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
   const url = onBranch
     ? "/api/branch/file?" + repoQuery() + "&name=" + encodeURIComponent(state.branch) + "&path=" + encodeURIComponent(path)
@@ -174,7 +217,6 @@ async function openPath(path, line, push) {
   $("back").disabled = state.stack.length === 0;
   renderFile();
   renderSidebar();
-  renderComments();
   if (line) {
     const node = document.getElementById("line-" + line);
     if (node) {
@@ -190,7 +232,7 @@ async function loadOutline(path) {
   select.replaceChildren();
   const blank = document.createElement("option");
   blank.value = "";
-  blank.textContent = "Outline";
+  blank.textContent = "—";
   select.append(blank);
   data.outline.forEach((item) => {
     const option = document.createElement("option");
@@ -223,159 +265,345 @@ function renderFile() {
     $("editor").value = file.content;
     return;
   }
+  const typing = document.activeElement && document.activeElement.classList.contains("draft-body");
+  captureDraft();
   const code = $("code");
   code.replaceChildren();
+  code.classList.remove("split");
   if (file.binary) {
     code.append(el("p", "empty", "Binary file. Kensa leaves it closed."));
     return;
   }
-  const deletions = {};
-  (file.deletions || []).forEach((item) => {
-    (deletions[item.before] = deletions[item.before] || []).push(item.text);
-  });
-  const anchors = {};
-  (file.anchors || []).forEach((item) => {
-    (anchors[item.line] = anchors[item.line] || []).push(item);
-  });
+  const pairs = file.pairs || [];
+  if (!pairs.length) {
+    code.append(el("p", "empty", "This file is empty."));
+    return;
+  }
+  code.classList.add("split");
+  const head = document.createElement("div");
+  head.className = "split-head";
+  head.append(el("span", "pane-label", "Old"), el("span", "pane-label new", "New"));
+  code.append(head);
   const commentsAt = {};
+  const orphaned = [];
   state.comments.filter((item) => item.path === file.path).forEach((item) => {
+    if (item.orphaned) {
+      orphaned.push(item);
+      return;
+    }
     (commentsAt[item.line] = commentsAt[item.line] || []).push(item);
   });
-  file.rows.forEach((row) => {
-    (anchors[row.num] || []).forEach((anchor) => code.append(hunkBar(file.path, anchor)));
-    (deletions[row.num] || []).forEach((text) => code.append(ghostRow(text)));
-    code.append(codeRow(row, commentsAt[row.num] || []));
+  if (orphaned.length) {
+    code.append(lineThread(orphaned, null, false));
+  }
+  const commentOnOld = file.status === "D";
+  let drafted = false;
+  pairs.forEach((pair) => {
+    const number = commentOnOld ? pair.oldNum : pair.newNum;
+    code.append(paneCell(PANE_OLD, pair, commentsAt, number, commentOnOld));
+    code.append(paneCell(PANE_NEW, pair, commentsAt, number, !commentOnOld));
+    if (number == null) {
+      return;
+    }
+    const notes = commentsAt[number] || [];
+    const drafting = Boolean(state.draft && state.draft.line === number);
+    if (drafting) {
+      drafted = true;
+    }
+    if (notes.length || drafting) {
+      code.append(lineThread(notes, number, drafting));
+    }
   });
-  const end = file.rows.length + 1;
-  (deletions[end] || []).forEach((text) => code.append(ghostRow(text)));
-  if (!file.rows.length) {
-    code.append(el("p", "empty", "This file is empty."));
+  if (state.draft && !drafted) {
+    code.append(lineThread([], state.draft.line, true));
+  }
+  if (typing && state.draft) {
+    const field = document.querySelector(".draft-body");
+    if (field) {
+      field.focus();
+      const end = field.value.length;
+      field.setSelectionRange(end, end);
+    }
   }
 }
 
-function hunkBar(path, anchor) {
-  const bar = document.createElement("div");
-  bar.className = "hunk";
-  const existing = state.hunks.find((item) => item.path === path && item.header === anchor.header);
-  const label = document.createElement("code");
-  label.textContent = anchor.header;
-  bar.append(label);
-  bar.append(markButton(path, anchor.header, "ok", "OK", existing));
-  bar.append(markButton(path, anchor.header, "change", "Change", existing));
-  return bar;
-}
-
-function markButton(path, header, mark, text, existing) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = existing && existing.mark === mark ? text + " ·" : text;
-  button.addEventListener("click", () => {
-    post("/api/hunks", { path: path, header: header, mark: mark })
-      .then(refresh)
-      .catch((error) => notice(error.message));
-  });
-  return button;
-}
-
-function ghostRow(text) {
-  const row = document.createElement("div");
-  row.className = "ghost";
-  row.append(el("span", "gutter", "−"));
+function paneCell(side, pair, commentsAt, commentLine, ownsComment) {
+  const number = side === PANE_OLD ? pair.oldNum : pair.newNum;
+  const text = side === PANE_OLD ? pair.oldText : pair.newText;
+  const cell = document.createElement("div");
+  const present = text !== null && text !== undefined;
+  let tone = "";
+  if (present && side === PANE_OLD && (pair.kind === "del" || pair.kind === "change")) {
+    tone = "del";
+  }
+  if (present && side === PANE_NEW && (pair.kind === "add" || pair.kind === "change")) {
+    tone = "add";
+  }
+  cell.className = "cell " + side + (tone ? " " + tone : "") + (number == null ? " blank" : "");
+  const gutter = document.createElement("span");
+  gutter.className = "gutter";
+  if (ownsComment && number != null) {
+    cell.id = "line-" + number;
+    if (state.selectedLine === number) {
+      cell.classList.add("selected");
+    }
+    (commentsAt[number] || []).forEach((comment) => {
+      const dot = document.createElement("span");
+      dot.className = "badge " + comment.severity;
+      gutter.append(dot);
+    });
+  }
+  if (commentLine != null && number != null) {
+    cell.classList.add("commentable");
+    cell.addEventListener("click", (event) => {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && cell.contains(selection.anchorNode)) {
+        return;
+      }
+      if (event.target.closest("button")) {
+        return;
+      }
+      openDraft(commentLine);
+    });
+  }
+  if (number != null) {
+    gutter.append(document.createTextNode(String(number)));
+  }
   const pre = document.createElement("pre");
   pre.className = "text";
-  pre.textContent = text;
-  row.append(pre);
+  pre.textContent = present ? text : "";
+  cell.append(gutter, pre);
+  return cell;
+}
+
+function lineThread(notes, line, drafting) {
+  const thread = document.createElement("div");
+  thread.className = "line-thread";
+  if (line) {
+    thread.setAttribute("aria-label", "Line " + line);
+  }
+  notes.forEach((comment) => thread.append(noteRow(comment)));
+  if (drafting) {
+    thread.append(draftForm());
+  }
+  return thread;
+}
+
+function noteRow(comment) {
+  const row = document.createElement("div");
+  row.className = "line-note " + (comment.severity || "") + (comment.orphaned ? " orphaned" : "");
+  const severity = document.createElement("span");
+  severity.className = "sev";
+  severity.textContent = comment.orphaned ? COMMENT_MOVED : comment.severity;
+  const body = document.createElement("p");
+  body.textContent = comment.body;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "quiet";
+  remove.textContent = COMMENT_DISMISS;
+  remove.addEventListener("click", () => dismissComment(comment.id));
+  row.append(severity, body, remove);
   return row;
 }
 
-function codeRow(row, comments) {
-  const line = document.createElement("div");
-  line.className = "row " + row.kind + (state.selectedLine === row.num ? " selected" : "");
-  line.id = "line-" + row.num;
-  const gutter = document.createElement("button");
-  gutter.type = "button";
-  gutter.className = "gutter";
-  comments.forEach((comment) => {
-    const dot = document.createElement("span");
-    dot.className = "badge " + comment.severity;
-    gutter.append(dot);
+function draftForm() {
+  const form = document.createElement("form");
+  form.className = "draft";
+  const field = document.createElement("textarea");
+  field.className = "draft-body";
+  field.rows = 2;
+  field.placeholder = COMMENT_PLACEHOLDER;
+  field.setAttribute("aria-label", COMMENT_PLACEHOLDER);
+  field.value = state.draft.body;
+  const actions = document.createElement("div");
+  actions.className = "draft-actions";
+  const severity = document.createElement("select");
+  severity.className = "draft-severity";
+  severity.setAttribute("aria-label", SEVERITY_LABEL);
+  SEVERITIES.forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    if (name === state.draft.severity) {
+      option.selected = true;
+    }
+    severity.append(option);
   });
-  gutter.append(document.createTextNode(String(row.num)));
-  gutter.addEventListener("click", () => selectLine(row.num));
-  const pre = document.createElement("pre");
-  pre.className = "text";
-  pre.textContent = row.text;
-  line.append(gutter, pre);
-  return line;
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "primary";
+  save.textContent = COMMENT_SAVE;
+  save.disabled = !state.draft.body.trim();
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "quiet";
+  cancel.textContent = COMMENT_CANCEL;
+  cancel.addEventListener("click", () => closeDraft());
+  severity.addEventListener("change", () => {
+    state.draft.severity = severity.value;
+  });
+  field.addEventListener("input", () => {
+    state.draft.body = field.value;
+    save.disabled = !field.value.trim();
+  });
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDraft();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      saveDraft();
+    }
+  });
+  actions.append(severity, save, cancel);
+  form.append(field, actions);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveDraft();
+  });
+  return form;
+}
+
+function captureDraft() {
+  if (!state.draft) {
+    return;
+  }
+  const field = document.querySelector(".draft-body");
+  const severity = document.querySelector(".draft-severity");
+  if (field) {
+    state.draft.body = field.value;
+  }
+  if (severity) {
+    state.draft.severity = severity.value;
+  }
+}
+
+function openDraft(line) {
+  captureDraft();
+  if (state.draft && state.draft.line === line && !state.draft.body.trim()) {
+    state.draft = null;
+    state.selectedLine = line;
+    renderFile();
+    return;
+  }
+  const body = state.draft ? state.draft.body : "";
+  const severity = state.draft && SEVERITIES.includes(state.draft.severity)
+    ? state.draft.severity
+    : SEVERITY_SUGGESTION;
+  state.draft = { line: line, severity: severity, body: body };
+  state.selectedLine = line;
+  renderFile();
+  const field = document.querySelector(".draft-body");
+  if (field) {
+    field.focus();
+    const thread = field.closest(".line-thread");
+    if (thread) {
+      thread.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+
+function closeDraft() {
+  state.draft = null;
+  renderFile();
+}
+
+function saveDraft() {
+  captureDraft();
+  if (!state.file || !state.draft || !state.draft.body.trim()) {
+    return;
+  }
+  const line = state.draft.line;
+  const severity = state.draft.severity;
+  const body = state.draft.body.trim();
+  post("/api/comments", {
+    path: state.file.path,
+    line: line,
+    severity: severity,
+    body: body,
+  }).then(async () => {
+    state.draft = null;
+    state.selectedLine = line;
+    notice("");
+    await refresh();
+    const node = document.getElementById("line-" + line);
+    if (node) {
+      node.scrollIntoView({ block: "nearest" });
+    }
+  }).catch((error) => notice(error.message));
+}
+
+function dismissComment(commentId) {
+  api("/api/comments?" + repoQuery() + "&id=" + encodeURIComponent(commentId), { method: "DELETE" })
+    .then(() => refresh())
+    .catch((error) => notice(error.message));
 }
 
 function selectLine(line) {
   state.selectedLine = line;
-  $("comment-target").textContent = state.file.path + ":" + line;
-  document.querySelectorAll(".row.selected").forEach((node) => node.classList.remove("selected"));
+  document.querySelectorAll(".cell.selected").forEach((node) => node.classList.remove("selected"));
   const node = document.getElementById("line-" + line);
   if (node) {
     node.classList.add("selected");
   }
-  $("comment-body").focus();
 }
 
-function renderComments() {
-  const list = $("comment-list");
-  list.replaceChildren();
-  const rows = state.file
-    ? state.comments.filter((item) => item.path === state.file.path)
-    : state.comments;
-  if (!rows.length) {
-    list.append(el("li", "meta", "No comments yet."));
+function readTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === THEME_BRIGHT || stored === THEME_DARK) {
+      return stored;
+    }
+  } catch (error) {
+    return THEME_DARK;
+  }
+  return THEME_DARK;
+}
+
+function applyTheme(theme) {
+  const chosen = theme === THEME_BRIGHT ? THEME_BRIGHT : THEME_DARK;
+  document.documentElement.setAttribute("data-theme", chosen);
+  const toggle = $("theme-toggle");
+  const dark = chosen === THEME_DARK;
+  toggle.setAttribute("aria-pressed", dark ? "true" : "false");
+  const label = dark ? THEME_BRIGHT_LABEL : THEME_DARK_LABEL;
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+  try {
+    localStorage.setItem(THEME_KEY, chosen);
+  } catch (error) {
     return;
   }
-  rows.forEach((comment) => {
-    const item = document.createElement("li");
-    const where = document.createElement("button");
-    where.type = "button";
-    where.className = "link";
-    where.textContent = (comment.orphaned ? "moved " : "") + comment.path + ":" + comment.line + " " + comment.severity;
-    where.addEventListener("click", () => {
-      if (!state.file || state.file.path !== comment.path) {
-        openPath(comment.path, comment.line, true).catch((error) => notice(error.message));
-        return;
-      }
-      selectLine(comment.line);
-    });
-    const body = document.createElement("p");
-    body.textContent = comment.body;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Dismiss";
-    remove.addEventListener("click", () => {
-      api("/api/comments?" + repoQuery() + "&id=" + encodeURIComponent(comment.id), { method: "DELETE" })
-        .then(() => refresh())
-        .catch((error) => notice(error.message));
-    });
-    item.append(where, body, remove);
-    list.append(item);
-  });
+}
+
+function readSidebarCollapsed() {
+  try {
+    return sessionStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+function setSidebarCollapsed(collapsed) {
+  $("app").classList.toggle("sidebar-collapsed", collapsed);
+  $("sidebar-body").hidden = collapsed;
+  const toggle = $("sidebar-toggle");
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  const label = collapsed ? SIDEBAR_SHOW_LABEL : SIDEBAR_HIDE_LABEL;
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+  try {
+    sessionStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+  } catch (error) {
+    return;
+  }
 }
 
 function bind() {
-  $("comment-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (!state.file || !state.selectedLine) {
-      notice("Select a line first.");
-      return;
-    }
-    post("/api/comments", {
-      path: state.file.path,
-      line: state.selectedLine,
-      severity: $("severity").value,
-      body: $("comment-body").value,
-    }).then(async () => {
-      $("comment-body").value = "";
-      notice("");
-      await refresh();
-      await openPath(state.file.path, state.selectedLine, false);
-    }).catch((error) => notice(error.message));
+  $("sidebar-toggle").addEventListener("click", () => {
+    setSidebarCollapsed(!$("sidebar-body").hidden);
   });
 
   $("edit").addEventListener("click", () => {
@@ -405,6 +633,8 @@ function bind() {
       event.preventDefault();
       if (state.editing) {
         saveEditor();
+      } else if (state.draft) {
+        saveDraft();
       }
       return;
     }

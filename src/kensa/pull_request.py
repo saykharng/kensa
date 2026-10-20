@@ -160,6 +160,8 @@ def pull_request_file(root, number, relative):
         "binary": binary or matched["binary"],
         "content": "" if binary or matched["binary"] else text,
         "hunks": matched["hunks"],
+        "oldPath": matched["old_path"],
+        "newPath": matched["new_path"],
         "source": source,
         "editable": loaded["checkedOut"] and not (binary or matched["binary"]) and matched["new_path"] is not None,
     }

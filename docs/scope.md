@@ -1,6 +1,6 @@
 # Kensa scope
 
-This is the product the repository is building. Version 0.1 implements the local review loop below. A change to behavior should update this file.
+This is the product the repository is building. Version 0.1 implements the local review loop below. A change to behavior should update this file. How to use each feature is in the [README](../README.md).
 
 ## Product
 
@@ -11,9 +11,9 @@ The interface is a browser tab. `kensa`, run in a repository, starts one local s
 ## Reviewing a change
 
 - The server watches the git working tree and refreshes the diff against `HEAD`. It does not care which process saved the file.
-- Opening a change shows the whole file. Changed lines stay highlighted. The rest of the file is visible and editable.
-- Save writes the file to disk. The agent sees that write the next time it reads the file.
-- A person can comment on a line and mark it `bug`, `suggestion`, or `nit`, and can mark a hunk `ok` or `change this`.
+- Opening a change shows the whole file in two panes: old on the left, new on the right. Changed lines stay highlighted. The rest of the file is visible. The file list can be collapsed. The page can be dark or bright, and the browser remembers the choice.
+- **Edit** then **Save** writes the file to disk. The agent sees that write the next time it reads the file.
+- A person comments by clicking a line. The note opens under that line. They mark it `bug`, `suggestion`, or `nit` and press **Save**. **Dismiss** removes it. The comment follows the line text when the file changes.
 
 ## Moving through the code
 
@@ -35,7 +35,7 @@ Two doors, same comments:
 - `.kensa/open.md` in the repository under review, which any agent can read. Kensa gitignores that path in the repository it is reviewing so the notes are not committed by accident.
 - An MCP server, `kensa mcp`, with `review_open`, `review_comments`, and `review_status`. It reads the same review files as the browser.
 
-The installer registers that MCP server with every agent it finds. **Send** is how the next agent turn picks up the comments. **Hold** keeps the person on the current diff until they send.
+The installer registers that MCP server with every agent it finds. **Send** writes `.kensa/open.md` so the next agent turn can read the comments. **Hold** tells the agent to stop new edits until Hold is turned off.
 
 Review state for the app itself lives in `~/.kensa/<repo>/`, not in the repository under review.
 

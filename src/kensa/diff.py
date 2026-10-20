@@ -1,5 +1,6 @@
 """Parse git unified diffs and place them on a full file."""
 
+import difflib
 import re
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -167,8 +168,102 @@ def render_document(new_lines, hunks):
     return rows, deletions
 
 
+def align_panes(old_lines, new_lines):
+    """Line up two full files for a side-by-side view.
+
+    Each pair has oldNum, oldText, newNum, newText, and kind.
+    kind is context, add, del, or change. A missing side is None,
+    so the shorter side of a replacement stays blank instead of shifting.
+    """
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    pairs = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset, text in enumerate(old_lines[i1:i2]):
+                pairs.append(_pair(i1 + offset, text, j1 + offset, new_lines[j1 + offset], "context"))
+            continue
+        if tag == "delete":
+            for offset, text in enumerate(old_lines[i1:i2]):
+                pairs.append(_pair(i1 + offset, text, None, None, "del"))
+            continue
+        if tag == "insert":
+            for offset, text in enumerate(new_lines[j1:j2]):
+                pairs.append(_pair(None, None, j1 + offset, text, "add"))
+            continue
+        old_slice = old_lines[i1:i2]
+        new_slice = new_lines[j1:j2]
+        count = max(len(old_slice), len(new_slice))
+        for offset in range(count):
+            has_old = offset < len(old_slice)
+            has_new = offset < len(new_slice)
+            if has_old and has_new:
+                kind = "change"
+            elif has_old:
+                kind = "del"
+            else:
+                kind = "add"
+            pairs.append(
+                _pair(
+                    i1 + offset if has_old else None,
+                    old_slice[offset] if has_old else None,
+                    j1 + offset if has_new else None,
+                    new_slice[offset] if has_new else None,
+                    kind,
+                )
+            )
+    return pairs
+
+
+def _pair(old_index, old_text, new_index, new_text, kind):
+    return {
+        "oldNum": None if old_index is None else old_index + 1,
+        "oldText": old_text,
+        "newNum": None if new_index is None else new_index + 1,
+        "newText": new_text,
+        "kind": kind,
+    }
+
+
+def old_lines_from_hunks(new_lines, hunks):
+    """Rebuild the previous file when only the new file and a unified diff exist.
+
+    Lines outside hunks are copied through. A hunk with no new-file lines treats
+    new_start as the first new line after the deletion.
+    """
+    if not hunks:
+        return list(new_lines)
+    old = []
+    cursor = 0
+    limit = len(new_lines)
+    for hunk in hunks:
+        start = hunk.get("new_start") or 1
+        if start < 1:
+            start = 1
+        target = start - 1
+        if target < cursor:
+            target = cursor
+        if target > limit:
+            target = limit
+        old.extend(new_lines[cursor:target])
+        cursor = target
+        for item in hunk["lines"]:
+            kind = item["type"]
+            if kind == "add":
+                cursor += 1
+            elif kind == "context":
+                old.append(item["text"])
+                cursor += 1
+            elif kind == "del":
+                old.append(item["text"])
+            if cursor > limit:
+                cursor = limit
+    if cursor < limit:
+        old.extend(new_lines[cursor:])
+    return old
+
+
 def hunk_anchors(hunks):
-    """Line in the new file where each hunk should offer ok / change this."""
+    """Line in the new file where a changed hunk begins."""
     anchors = []
     for hunk in hunks:
         line = None
