@@ -15,6 +15,8 @@ once it ships releases.
 - `.kensa/open.md` for any coding agent, plus an MCP server with `review_open`, `review_comments`, and `review_status`.
 - The command is `kc` (Kensa changes). `kc` inspects your uncommitted changes. `kc <branch>` inspects that branch against the default branch. If the branch has a GitHub pull request, Submit review posts it through `gh`.
 - The first install is `python3 bin/kc setup`. It links `kc` onto `~/.local/bin`, adds that directory to `~/.zshrc` when PATH needs it, and registers the MCP server. An existing `kc` program is left in place.
+- Setup makes Kensa the reviewer for Grok and Claude. It asks for the phrase that opens a review, and uses `review` when you press enter or when the shell is not interactive. `kc setup --prompt <phrase>` sets the phrase directly. An existing Grok review skill that setup did not write is left in place.
+- That phrase calls the `open_review` tool, which opens the Kensa screen.
 - The diff is two panes, old on the left and new on the right. The file list can be collapsed.
 - The page has Dark and Bright themes. The choice is kept in the browser.
 - The review page was redesigned: quieter chrome, a clearer file list, and a calmer diff.

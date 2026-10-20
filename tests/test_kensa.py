@@ -12,7 +12,15 @@ from urllib.request import Request, urlopen
 
 from kensa.cli import main as cli_main
 from kensa.comments import add_comment, empty_state, place_comment, render_open_md
-from kensa.constants import COMMAND
+from kensa.constants import (
+    AGENT_CLAUDE,
+    AGENT_GROK,
+    COMMAND,
+    DEFAULT_REVIEW_PROMPT,
+    OPEN_REVIEW_TOOL,
+    REVIEWER_MARKER,
+    REVIEWER_SKILL,
+)
 from kensa.diff import (
     align_panes,
     hunk_anchors,
@@ -30,7 +38,14 @@ from kensa.pull_request import (
     split_inline_comments,
 )
 from kensa.server import serve_in_thread
-from kensa.setup_agents import install, install_command
+from kensa.setup_agents import (
+    detect_review_agents,
+    install,
+    install_command,
+    install_reviewer,
+    read_review_prompt,
+    setup_prompt_arg,
+)
 
 SAMPLE_DIFF = """diff --git a/src/app.py b/src/app.py
 index 1111111..2222222 100644
@@ -325,7 +340,26 @@ class McpTests(unittest.TestCase):
         decoded = _frames(output.getvalue())
         self.assertEqual(decoded[0]["result"]["serverInfo"]["name"], "Kensa")
         names = [tool["name"] for tool in decoded[1]["result"]["tools"]]
-        self.assertEqual(names, ["review_status", "review_comments", "review_open"])
+        self.assertEqual(names, [OPEN_REVIEW_TOOL, "review_status", "review_comments", "review_open"])
+
+    def test_open_review_opens_the_screen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            quiet = {"cwd": root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            subprocess.check_call(["git", "init", "-q", "-b", "main"], **quiet)
+            call = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": OPEN_REVIEW_TOOL, "arguments": {"repo": str(root), "branch": "feature"}},
+            }
+            output = io.BytesIO()
+            with patch("kensa.cli._ensure_server"), patch("kensa.cli.webbrowser.open") as opened:
+                serve_stdio(io.BytesIO(_frame(call)), output)
+            decoded = _frames(output.getvalue())
+            url = json.loads(decoded[0]["result"]["content"][0]["text"])["url"]
+            self.assertIn("branch=feature", url)
+            self.assertEqual(opened.call_args.args[0], url)
 
 
 class SetupTests(unittest.TestCase):
@@ -345,6 +379,95 @@ class SetupTests(unittest.TestCase):
             self.assertIn("theme = \"dark\"", grok)
             install(repo, home)
             self.assertEqual(grok.count("[mcp_servers.kensa]"), (home / ".grok" / "config.toml").read_text(encoding="utf-8").count("[mcp_servers.kensa]"))
+
+
+class ReviewerSetupTests(unittest.TestCase):
+    def test_setup_prompt_arg(self):
+        self.assertIsNone(setup_prompt_arg([]))
+        self.assertEqual(setup_prompt_arg(["--prompt", "look here"]), "look here")
+        with self.assertRaises(RepoError):
+            setup_prompt_arg(["--prompt"])
+
+    def test_read_review_prompt(self):
+        self.assertEqual(read_review_prompt(None, io.StringIO("")), DEFAULT_REVIEW_PROMPT)
+        tty = io.StringIO("\n")
+        tty.isatty = lambda: True
+        custom = io.StringIO("look here\n")
+        custom.isatty = lambda: True
+        with patch("sys.stdout", io.StringIO()):
+            self.assertEqual(read_review_prompt(None, tty), DEFAULT_REVIEW_PROMPT)
+            self.assertEqual(read_review_prompt(None, custom), "look here")
+        with self.assertRaises(RepoError):
+            read_review_prompt("x" * 201, io.StringIO(""))
+
+    def test_installs_grok_and_claude_reviewer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".claude" / "CLAUDE.md").parent.mkdir(parents=True)
+            (home / ".claude" / "CLAUDE.md").write_text("# Mine\n\nKeep this.\n", encoding="utf-8")
+            notes = install_reviewer("look here", home, agents=(AGENT_GROK, AGENT_CLAUDE))
+            skill = (home / ".grok" / "skills" / REVIEWER_SKILL / "SKILL.md").read_text(encoding="utf-8")
+            review = (home / ".grok" / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8")
+            rule = (home / ".grok" / "rules" / "kensa.md").read_text(encoding="utf-8")
+            claude_skill = (home / ".claude" / "skills" / REVIEWER_SKILL / "SKILL.md").read_text(encoding="utf-8")
+            memory = (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+            self.assertIn("name: kensa", skill)
+            self.assertIn("look here", skill)
+            self.assertIn(OPEN_REVIEW_TOOL, skill)
+            self.assertNotIn("Apply the comments", skill)
+            self.assertIn(OPEN_REVIEW_TOOL, rule)
+            self.assertIn(REVIEWER_MARKER, skill)
+            self.assertIn("name: review", review)
+            self.assertIn("look here", rule)
+            self.assertEqual(skill, claude_skill)
+            self.assertIn("# Mine", memory)
+            self.assertIn("Keep this.", memory)
+            self.assertEqual(memory.count(REVIEWER_MARKER), 2)
+            install_reviewer('say "review"', home, agents=(AGENT_GROK, AGENT_CLAUDE))
+            updated = (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+            self.assertEqual(updated.count(f"<!-- {REVIEWER_MARKER} -->"), 1)
+            self.assertIn("# Mine", updated)
+            self.assertIn('say "review"', (home / ".grok" / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8"))
+            self.assertTrue(any("Phrase: look here" in note for note in notes))
+
+    def test_leaves_a_foreign_review_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            review = home / ".grok" / "skills" / "review" / "SKILL.md"
+            review.parent.mkdir(parents=True)
+            review.write_text("---\nname: review\n---\nMine.\n", encoding="utf-8")
+            notes = install_reviewer("review", home, agents=(AGENT_GROK,))
+            self.assertEqual(review.read_text(encoding="utf-8"), "---\nname: review\n---\nMine.\n")
+            self.assertTrue(any("left" in note for note in notes))
+            self.assertIn("name: kensa", (home / ".grok" / "skills" / REVIEWER_SKILL / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_detects_installed_agents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".grok").mkdir()
+            with patch("kensa.setup_agents.shutil.which", return_value=None):
+                self.assertEqual(detect_review_agents(home), [AGENT_GROK])
+                (home / ".claude.json").write_text("{}\n", encoding="utf-8")
+                self.assertEqual(detect_review_agents(home), [AGENT_GROK, AGENT_CLAUDE])
+
+    def test_setup_command_passes_the_phrase(self):
+        with patch("kensa.cli.install_command", return_value=["linked"]), \
+             patch("kensa.cli.install_reviewer", return_value=["reviewer"]) as reviewer, \
+             patch("kensa.cli.install", return_value=["mcp"]), \
+             patch("kensa.cli.discover", return_value=Path("/tmp/repo")), \
+             patch("sys.stdin", io.StringIO("")), \
+             patch("sys.stdout", io.StringIO()):
+            code = cli_main(["setup", "--prompt", "look here"])
+            default_code = cli_main(["setup"])
+        self.assertEqual(code, 0)
+        self.assertEqual(default_code, 0)
+        self.assertEqual(reviewer.call_args_list[0].args[0], "look here")
+        self.assertEqual(reviewer.call_args_list[1].args[0], DEFAULT_REVIEW_PROMPT)
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            refused = cli_main(["setup", "--nope"])
+        self.assertEqual(refused, 1)
+        self.assertIn("--prompt", stderr.getvalue())
 
 
 def _frame(message):

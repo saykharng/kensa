@@ -6,7 +6,7 @@ This is the product the repository is building. Version 0.1 implements the local
 
 Kensa is an open source local review tool. People install it once and use it beside whichever agent writes their code, including Grok, Claude, and Cursor. The installed program is a build of this repository.
 
-The interface is a browser tab. The first install, from a checkout, is `python3 bin/kc setup`. That links `kc` onto `~/.local/bin` and registers the agent. If `~/.local/bin` is not on PATH, setup adds it in `~/.zshrc`. If a different `kc` is already installed, setup leaves that program in place. After that, `kc` in a repository starts one local server if it is not already running and opens the tab. An IDE does not have to be open. The command name is Kensa changes: it inspects the changes.
+The interface is a browser tab. The first install, from a checkout, is `python3 bin/kc setup`. That links `kc` onto `~/.local/bin` and registers the agent. If `~/.local/bin` is not on PATH, setup adds it in `~/.zshrc`. If a different `kc` is already installed, setup leaves that program in place. Setup also makes Kensa the reviewer for Grok and Claude when those are installed. It asks for the phrase that should open a review. The default phrase is `review`. `kc setup --prompt <phrase>` sets that phrase without asking. After that, `kc` in a repository starts one local server if it is not already running and opens the tab. An IDE does not have to be open. The command name is Kensa changes: it inspects the changes.
 
 ## Reviewing a change
 
@@ -33,9 +33,9 @@ Version 1 does not run a language server. One can be added later.
 Two doors, same comments:
 
 - `.kensa/open.md` in the repository under review, which any agent can read. Kensa gitignores that path in the repository it is reviewing so the notes are not committed by accident.
-- An MCP server, `kc mcp`, with `review_open`, `review_comments`, and `review_status`. It reads the same review files as the browser.
+- An MCP server, `kc mcp`, with `open_review`, `review_open`, `review_comments`, and `review_status`. `open_review` opens the review screen. The other tools read the same review files as the browser.
 
-The installer registers that MCP server with every agent it finds. **Send** writes `.kensa/open.md` so the next agent turn can read the comments. **Hold** tells the agent to stop new edits until Hold is turned off.
+The installer registers that MCP server with every agent it finds. For Grok, it writes the `kensa` skill, a home rule, and replaces `/review` when that skill is still the one setup wrote. For Claude, it writes the `kensa` skill and a marked block in `~/.claude/CLAUDE.md`. When a review is asked, the agent calls `open_review`. That opens the screen. **Send** writes `.kensa/open.md` so the next agent turn can read the comments. **Hold** tells the agent to stop new edits until Hold is turned off.
 
 Review state for the app itself lives in `~/.kensa/<repo>/`, not in the repository under review.
 

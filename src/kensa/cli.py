@@ -16,7 +16,7 @@ from kensa.gitrepo import RepoError, discover
 from kensa.mcp_server import serve_stdio
 from kensa.paths import kensa_home
 from kensa.server import serve
-from kensa.setup_agents import install, install_command
+from kensa.setup_agents import install, install_command, install_reviewer, read_review_prompt, setup_prompt_arg
 
 
 def main(argv=None):
@@ -46,7 +46,14 @@ def _main(argv):
         serve_stdio()
         return 0
     if command == "setup":
+        try:
+            prompt = read_review_prompt(setup_prompt_arg(argv[1:]), sys.stdin)
+        except RepoError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         for note in install_command():
+            print(note)
+        for note in install_reviewer(prompt):
             print(note)
         for note in install(discover(Path.cwd())):
             print(note)
@@ -61,15 +68,20 @@ def _main(argv):
     return 0
 
 
-def _open_tab(start, branch=None):
+def open_screen(start, branch=None):
+    """Start the server if needed and open the review screen. Returns the URL."""
     root = discover(start)
     _ensure_server()
     query = f"repo={quote(str(root))}"
     if branch:
         query += f"&branch={quote(branch)}"
     url = f"http://{HOST}:{PORT}/?{query}"
-    print(url)
     webbrowser.open(url)
+    return url
+
+
+def _open_tab(start, branch=None):
+    print(open_screen(start, branch))
 
 
 def _ensure_server():
@@ -122,7 +134,7 @@ def _help():
         "\n"
         f"  {COMMAND}                 Inspect uncommitted changes\n"
         f"  {COMMAND} <branch>        Inspect that branch against the default branch\n"
-        f"  {COMMAND} setup           Install {COMMAND} and register it with agents you have\n"
+        f"  {COMMAND} setup [--prompt <phrase>]  Install {COMMAND} and set the reviewer\n"
         f"  {COMMAND} serve           Run the server in the foreground\n"
         f"  {COMMAND} mcp             Speak MCP on stdin. Agents launch this.\n"
         f"{record}"

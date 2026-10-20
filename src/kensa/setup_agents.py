@@ -6,7 +6,20 @@ import shutil
 import sys
 from pathlib import Path
 
-from kensa.constants import COMMAND, PATH_LINE, USER_BIN
+from kensa.constants import (
+    AGENT_CLAUDE,
+    AGENT_GROK,
+    BUNDLED_REVIEW_SKILL,
+    COMMAND,
+    DEFAULT_REVIEW_PROMPT,
+    OPEN_REVIEW_TOOL,
+    PATH_LINE,
+    REVIEW_PROMPT_LIMIT,
+    REVIEWER_MARKER,
+    REVIEWER_SKILL,
+    USER_BIN,
+)
+from kensa.gitrepo import RepoError
 
 LAUNCHER_MARK = "from kensa.cli import main"
 
@@ -144,3 +157,186 @@ def _append_grok(path, command, args):
 def _toml_string(value):
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def setup_prompt_arg(argv):
+    """Return the phrase passed to setup, or None when setup should ask."""
+    if not argv:
+        return None
+    if len(argv) == 2 and argv[0] == "--prompt":
+        return argv[1]
+    raise RepoError(f"Use {COMMAND} setup or {COMMAND} setup --prompt <phrase>")
+
+
+def valid_review_prompt(prompt):
+    text = str(prompt).strip()
+    if not text or any(char in text for char in "\n\r\x00"):
+        raise RepoError("The review phrase must be one non-empty line.")
+    if len(text) > REVIEW_PROMPT_LIMIT:
+        raise RepoError(f"The review phrase must be {REVIEW_PROMPT_LIMIT} characters or fewer.")
+    if REVIEWER_MARKER in text or "<!--" in text or "-->" in text:
+        raise RepoError("The review phrase cannot include a Kensa marker.")
+    return text
+
+
+def read_review_prompt(given, stdin):
+    """Use --prompt, else ask on a terminal, else the default phrase."""
+    if given is not None:
+        return valid_review_prompt(given)
+    if not stdin.isatty():
+        return DEFAULT_REVIEW_PROMPT
+    print(
+        "Kensa will be the reviewer for Grok and Claude.\n"
+        f"Phrase that opens a review [{DEFAULT_REVIEW_PROMPT}]: ",
+        end="",
+        flush=True,
+    )
+    line = stdin.readline()
+    if line.strip() == "":
+        return DEFAULT_REVIEW_PROMPT
+    return valid_review_prompt(line)
+
+
+def detect_review_agents(home):
+    home = Path(home)
+    found = []
+    if (home / ".grok").is_dir() or shutil.which(AGENT_GROK):
+        found.append(AGENT_GROK)
+    if (home / ".claude").is_dir() or (home / ".claude.json").is_file() or shutil.which(AGENT_CLAUDE):
+        found.append(AGENT_CLAUDE)
+    return found
+
+
+def install_reviewer(prompt=None, home=None, agents=None):
+    """Install Kensa as the reviewer for Grok and Claude. Returns notes."""
+    home = Path(home) if home is not None else Path.home()
+    phrase = valid_review_prompt(DEFAULT_REVIEW_PROMPT if prompt is None else prompt)
+    chosen = list(agents) if agents is not None else detect_review_agents(home)
+    if not chosen:
+        return ["No Grok or Claude found. Kensa is not set as a reviewer."]
+    notes = []
+    if AGENT_GROK in chosen:
+        notes.extend(_install_grok_reviewer(home, phrase))
+    if AGENT_CLAUDE in chosen:
+        notes.extend(_install_claude_reviewer(home, phrase))
+    return notes
+
+
+def _install_grok_reviewer(home, phrase):
+    skill = home / ".grok" / "skills" / REVIEWER_SKILL / "SKILL.md"
+    review = home / ".grok" / "skills" / BUNDLED_REVIEW_SKILL / "SKILL.md"
+    rule = home / ".grok" / "rules" / f"{REVIEWER_SKILL}.md"
+    notes = [f"Kensa is the reviewer for Grok. Phrase: {phrase}"]
+    notes.append(_write_text(skill, reviewer_skill(REVIEWER_SKILL, phrase)))
+    notes.append(_claim_review_skill(review, reviewer_skill(BUNDLED_REVIEW_SKILL, phrase)))
+    notes.append(_write_text(rule, reviewer_rule(phrase)))
+    return notes
+
+
+def _install_claude_reviewer(home, phrase):
+    skill = home / ".claude" / "skills" / REVIEWER_SKILL / "SKILL.md"
+    memory = home / ".claude" / "CLAUDE.md"
+    notes = [f"Kensa is the reviewer for Claude. Phrase: {phrase}"]
+    notes.append(_write_text(skill, reviewer_skill(REVIEWER_SKILL, phrase)))
+    notes.append(_merge_marked(memory, reviewer_rule(phrase)))
+    return notes
+
+
+def reviewer_skill(name, prompt):
+    triggers = _triggers(prompt)
+    description = (
+        f"Open the Kensa review screen. Use when the user says {prompt} or asks for a review. "
+        f"Call the {OPEN_REVIEW_TOOL} tool and stop."
+    )
+    when = "Use when the user says " + ", ".join(triggers) + "."
+    return (
+        "---\n"
+        f"name: {name}\n"
+        f"description: {_yaml_quote(description)}\n"
+        f"when-to-use: {_yaml_quote(when)}\n"
+        'argument-hint: "[branch]"\n'
+        "user-invocable: true\n"
+        "metadata:\n"
+        f"  kensa: {REVIEWER_MARKER}\n"
+        "---\n"
+        "\n"
+        f"{_skill_body(prompt)}"
+    )
+
+
+def reviewer_rule(prompt):
+    shown = prompt.replace('"', "'")
+    return (
+        "# Kensa\n"
+        "\n"
+        f'When the user says "{shown}" or asks for a review, call the Kensa tool `{OPEN_REVIEW_TOOL}`. '
+        "That opens the review screen.\n"
+    )
+
+
+def _triggers(prompt):
+    ordered = [
+        prompt,
+        DEFAULT_REVIEW_PROMPT,
+        "code review",
+        "review my changes",
+        "review my branch",
+        f"/{REVIEWER_SKILL}",
+        f"/{BUNDLED_REVIEW_SKILL}",
+    ]
+    found = []
+    for item in ordered:
+        if item not in found:
+            found.append(item)
+    return found
+
+
+def _skill_body(prompt):
+    return (
+        "# Open the review screen\n"
+        "\n"
+        f"When the user says {prompt}, or asks for a review, call the Kensa tool `{OPEN_REVIEW_TOOL}`.\n"
+        "\n"
+        "Pass `branch` when they named a branch.\n"
+        "\n"
+        "The tool opens the review screen. Stop there.\n"
+    )
+
+
+def _yaml_quote(value):
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_text(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return f"wrote {path}"
+
+
+def _claim_review_skill(path, text):
+    if path.is_file() and REVIEWER_MARKER not in path.read_text(encoding="utf-8"):
+        return f"left {path} alone. It is already a review skill."
+    return _write_text(path, text)
+
+
+def _merge_marked(path, block):
+    begin = f"<!-- {REVIEWER_MARKER} -->"
+    end = f"<!-- /{REVIEWER_MARKER} -->"
+    wrapped = f"{begin}\n{block.rstrip()}\n{end}\n"
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    start = existing.find(begin)
+    finish = existing.find(end)
+    if start != -1 and finish > start:
+        finish += len(end)
+        if finish < len(existing) and existing[finish] == "\n":
+            finish += 1
+        updated = existing[:start] + wrapped + existing[finish:]
+    elif existing == "":
+        updated = wrapped
+    else:
+        prefix = existing if existing.endswith("\n") else existing + "\n"
+        if not prefix.endswith("\n\n"):
+            prefix += "\n"
+        updated = prefix + wrapped
+    return _write_text(path, updated)

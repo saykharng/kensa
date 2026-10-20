@@ -4,11 +4,22 @@ import json
 import sys
 from pathlib import Path
 
-from kensa.constants import MCP_PROTOCOL, PRODUCT_NAME, VERSION
+from kensa.constants import MCP_PROTOCOL, OPEN_REVIEW_TOOL, PRODUCT_NAME, VERSION
 from kensa.gitrepo import RepoError
 from kensa.review import agent_view, repository, send
 
 _TOOLS = (
+    {
+        "name": OPEN_REVIEW_TOOL,
+        "description": "Open the Kensa review screen. Call this when the user asks for a review. This only opens the screen.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Repository path. Defaults to the working directory."},
+                "branch": {"type": "string", "description": "Branch to open. Omit for uncommitted changes."},
+            },
+        },
+    },
     {
         "name": "review_status",
         "description": "Open comments, hold state, and whether the review was sent.",
@@ -92,6 +103,14 @@ def _handle(message):
 
 
 def _call_tool(name, arguments):
+    if name == OPEN_REVIEW_TOOL:
+        from kensa.cli import open_screen
+
+        branch = arguments.get("branch")
+        if isinstance(branch, str):
+            branch = branch.strip() or None
+        url = open_screen(arguments.get("repo") or Path.cwd(), branch)
+        return json.dumps({"url": url})
     root = repository(arguments.get("repo") or Path.cwd())
     if name == "review_open":
         sent = send(root)
