@@ -19,4 +19,4 @@ once it ships releases.
 - The page has Dark and Bright themes. The choice is kept in the browser.
 - The review page was redesigned: quieter chrome, a clearer file list, and a calmer diff.
 - A comment is written on the line. Click the line, write the note, and Save.
-- The README explains how to use each feature.
+- The README is the short install and command page.

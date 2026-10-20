@@ -1,6 +1,6 @@
 # Kensa scope
 
-This is the product the repository is building. Version 0.1 implements the local review loop below. A change to behavior should update this file. How to use each feature is in the [README](../README.md).
+This is the product the repository is building. Version 0.1 implements the local review loop below. A change to behavior should update this file. Install and the review commands are in the [README](../README.md).
 
 ## Product
 
