@@ -15,10 +15,8 @@ This links `kc` into `~/.local/bin` and registers it with your agent. If that di
 ## Review
 
 ```bash
-kc
-kc their-branch
+kc                # your uncommitted changes
+kc their-branch   # that branch against main
 ```
-
-`kc` shows your uncommitted changes. `kc their-branch` shows that branch against `main`.
 
 [MIT](LICENSE). Copyright (c) 2026 Shekhar Gyanwali. See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
