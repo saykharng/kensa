@@ -4,8 +4,9 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-from kensa.constants import EXCLUDE_LINE, MAX_FILE_BYTES, REPO_NOTES_DIR
+from kensa.constants import BASE_BRANCH_LIMIT, EXCLUDE_LINE, MAX_FILE_BYTES, REPO_NOTES_DIR
 from kensa.diff import parse_name_status_z, parse_unified_diff
+from kensa.paths import base_branch_name
 
 
 class RepoError(ValueError):
@@ -57,10 +58,10 @@ def head_sha(root):
 
 
 def changed_files(root):
-    """Working tree compared with HEAD, plus untracked files."""
+    """Working tree compared with the configured branch, including commits and uncommitted edits."""
     rows = []
     if has_head(root):
-        proc = _git(root, ["diff", "-M", "--name-status", "-z", "HEAD"])
+        proc = _git(root, ["diff", "-M", "--name-status", "-z", comparison_ref(root)])
         rows.extend(parse_name_status_z(proc.stdout))
     untracked = _git(
         root,
@@ -87,20 +88,11 @@ def changed_files(root):
 
 
 def file_blob(root, relative, status):
-    """Return (text, binary). Deleted files are read from HEAD."""
+    """Return (text, binary). Deleted files are read from the comparison branch."""
     if status == "D":
         if not has_head(root):
             return "", False
-        proc = subprocess.run(
-            ["git", "show", f"HEAD:{relative}"],
-            cwd=root,
-            capture_output=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            message = proc.stderr.decode("utf-8", errors="replace").strip()
-            raise RepoError(message or "could not read the deleted file")
-        return _decode_blob(proc.stdout)
+        return show_ref_text(root, comparison_ref(root), relative)
     full = safe_path(root, relative)
     if not full.is_file():
         raise RepoError("file is not in the working tree")
@@ -125,7 +117,7 @@ def diff_hunks(root, relative, status):
         return []
     if not has_head(root):
         return []
-    proc = _git(root, ["diff", "-M", "-U3", "HEAD", "--", relative], check=False)
+    proc = _git(root, ["diff", "-M", "-U3", comparison_ref(root), "--", relative], check=False)
     parsed = parse_unified_diff(proc.stdout)
     for item in parsed:
         if item["new_path"] == relative or item["old_path"] == relative:
@@ -222,22 +214,42 @@ def resolve_branch(root, name):
     raise RepoError(f"branch {name} was not found")
 
 
+def valid_base_branch(name):
+    text = str(name).strip()
+    if len(text) > BASE_BRANCH_LIMIT or not _valid_branch_name(text):
+        raise RepoError("branch name is not valid")
+    return text
+
+
 def default_base(root):
-    """The branch a review is compared with. Prefers origin's default branch."""
-    proc = _git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
+    """The configured comparison branch, resolved in this repository."""
+    return resolve_branch(root, base_branch_name())
+
+
+def base_label(ref):
+    if ref.startswith("origin/"):
+        return ref[len("origin/") :]
+    return ref
+
+
+def comparison_ref(root):
+    """Merge-base of HEAD and the comparison branch, so commits and edits both show."""
+    base = default_base(root)
+    proc = _git(root, ["merge-base", base, "HEAD"], check=False)
     if proc.returncode == 0 and proc.stdout.strip():
         return proc.stdout.strip()
-    for name in ("main", "master"):
-        proc = _git(root, ["rev-parse", "--verify", "--quiet", name], check=False)
-        if proc.returncode == 0:
-            return name
-    raise RepoError("could not find a base branch such as main")
+    return base
 
 
-def branch_overview(root, name):
-    """Files changed on a branch since it diverged from the base branch."""
+def branch_overview(root, name, base_name=None):
+    """Files changed on a branch since it diverged from the comparison branch.
+
+    base_name is a one-off comparison branch. An empty value uses the branch saved at setup.
+    """
     resolved = resolve_branch(root, name)
-    base = default_base(root)
+    if isinstance(base_name, str):
+        base_name = base_name.strip()
+    base = resolve_branch(root, valid_base_branch(base_name)) if base_name else default_base(root)
     proc = _git(root, ["diff", "-M", "--name-status", "-z", f"{base}...{resolved}"])
     files = []
     seen = set()
@@ -252,7 +264,7 @@ def branch_overview(root, name):
         "name": name,
         "resolved": resolved,
         "base": base,
-        "baseLabel": base[len("origin/") :] if base.startswith("origin/") else base,
+        "baseLabel": base_label(base),
         "checkedOut": head_sha(root) == tip,
         "files": files,
     }

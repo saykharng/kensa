@@ -6,11 +6,11 @@ This is the product the repository is building. Version 0.1 implements the local
 
 Kensa is an open source local review tool. People install it once and use it beside whichever agent writes their code, including Grok, Claude, and Cursor. The installed program is a build of this repository.
 
-The interface is a browser tab. The first install, from a checkout, is `python3 bin/kc setup`. That links `kc` onto `~/.local/bin` and registers the agent. If `~/.local/bin` is not on PATH, setup adds it in `~/.zshrc`. If a different `kc` is already installed, setup leaves that program in place. Setup also makes Kensa the reviewer for Grok and Claude when those are installed. It asks for the phrase that should open a review. The default phrase is `review`. `kc setup --prompt <phrase>` sets that phrase without asking. After that, `kc` in a repository starts one local server if it is not already running and opens the tab. An IDE does not have to be open. The command name is Kensa changes: it inspects the changes.
+The interface is a browser tab. The first install, from a checkout, is `python3 bin/kc setup`. That links `kc` onto `~/.local/bin` and registers the agent. If `~/.local/bin` is not on PATH, setup adds it in `~/.zshrc`. If a different `kc` is already installed, setup leaves that program in place. Setup also makes Kensa the reviewer for Grok and Claude when those are installed. It asks for the phrase that should open a review, and for the branch reviews are compared against. The default phrase is `review`. The default branch is `develop`. Press enter to accept either. `kc setup --prompt <phrase> --base <branch>` sets both without asking. The choice is stored in `~/.kensa/config.json`. Setup ends by printing `Setup complete. Run kc in a repository to open a review.` After that, `kc` in a repository starts one local server if it is not already running and opens the tab. An IDE does not have to be open. The command name is Kensa changes: it inspects the changes.
 
 ## Reviewing a change
 
-- The server watches the git working tree and refreshes the diff against `HEAD`. It does not care which process saved the file.
+- The server watches the git working tree and refreshes the diff against the comparison branch chosen at setup, `develop` unless another name was saved. The diff includes commits on the current branch and edits that are not committed yet. It does not care which process saved the file.
 - Opening a change shows the whole file in two panes: old on the left, new on the right. Changed lines stay highlighted. The rest of the file is visible. The file list can be collapsed. The page can be dark or bright, and the browser remembers the choice.
 - **Edit** then **Save** writes the file to disk. The agent sees that write the next time it reads the file.
 - A person comments by clicking a line. The note opens under that line. They mark it `bug`, `suggestion`, or `nit` and press **Save**. **Dismiss** removes it. The comment follows the line text when the file changes.
@@ -41,7 +41,7 @@ Review state for the app itself lives in `~/.kensa/<repo>/`, not in the reposito
 
 ## Someone else's branch
 
-`kc <branch>` loads the diff of that branch against the default branch, usually `main`. The command takes the branch name. When GitHub has an open pull request for that branch, **Submit review** posts one review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. Submitting needs `gh auth login` once on that machine.
+`kc <branch>` loads the diff of that branch against the same comparison branch, `develop` unless setup saved another name. The command takes the branch name. `kc <branch> <base>` compares that branch with `<base>` for this run only and leaves the saved comparison branch unchanged. When GitHub has an open pull request for that branch, **Submit review** posts one review through `gh`, with verdict `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`. Each comment is attached to a line on the new side of the diff. Submitting needs `gh auth login` once on that machine.
 
 ## Out of scope for the first version
 

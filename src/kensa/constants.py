@@ -10,6 +10,10 @@ PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
 
 DEFAULT_REVIEW_PROMPT = "review"
 REVIEW_PROMPT_LIMIT = 200
+DEFAULT_BASE_BRANCH = "develop"
+BASE_BRANCH_KEY = "baseBranch"
+BASE_BRANCH_LIMIT = 200
+CONFIG_FILE = "config.json"
 REVIEWER_SKILL = "kensa"
 BUNDLED_REVIEW_SKILL = "review"
 REVIEWER_MARKER = "kensa-reviewer"

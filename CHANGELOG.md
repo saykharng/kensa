@@ -13,7 +13,9 @@ once it ships releases.
 - Open source repository: MIT license, contributing guide, code of conduct, security policy, and issue templates.
 - Local review server and browser page: full-file view, diff highlights, edit and save, line comments, quick open, outline, and symbol jump.
 - `.kensa/open.md` for any coding agent, plus an MCP server with `review_open`, `review_comments`, and `review_status`.
-- The command is `kc` (Kensa changes). `kc` inspects your uncommitted changes. `kc <branch>` inspects that branch against the default branch. If the branch has a GitHub pull request, Submit review posts it through `gh`.
+- The command is `kc` (Kensa changes). `kc` inspects your changes against the comparison branch, including commits and uncommitted edits. `kc <branch>` inspects that branch against the same comparison branch. `kc <branch> <base>` compares that branch with `<base>` for this run only. If the branch has a GitHub pull request, Submit review posts it through `gh`.
+- Setup asks which branch to compare against. The default is `develop`. Press enter to accept it, or type another name. `kc setup --base <branch>` sets it without asking.
+- When setup finishes, it prints `Setup complete. Run kc in a repository to open a review.`
 - The first install is `python3 bin/kc setup`. It links `kc` onto `~/.local/bin`, adds that directory to `~/.zshrc` when PATH needs it, and registers the MCP server. An existing `kc` program is left in place.
 - Setup makes Kensa the reviewer for Grok and Claude. It asks for the phrase that opens a review, and uses `review` when you press enter or when the shell is not interactive. `kc setup --prompt <phrase>` sets the phrase directly. An existing Grok review skill that setup did not write is left in place.
 - That phrase calls the `open_review` tool, which opens the Kensa screen.

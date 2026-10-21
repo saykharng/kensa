@@ -16,6 +16,7 @@ from kensa.constants import (
     AGENT_CLAUDE,
     AGENT_GROK,
     COMMAND,
+    DEFAULT_BASE_BRANCH,
     DEFAULT_REVIEW_PROMPT,
     OPEN_REVIEW_TOOL,
     REVIEWER_MARKER,
@@ -37,14 +38,16 @@ from kensa.pull_request import (
     build_review_request,
     split_inline_comments,
 )
+from kensa.paths import save_base_branch
 from kensa.server import serve_in_thread
 from kensa.setup_agents import (
     detect_review_agents,
     install,
     install_command,
     install_reviewer,
+    read_base_branch,
     read_review_prompt,
-    setup_prompt_arg,
+    setup_options,
 )
 
 SAMPLE_DIFF = """diff --git a/src/app.py b/src/app.py
@@ -188,7 +191,7 @@ class HttpTests(unittest.TestCase):
         os.environ["KENSA_HOME"] = self.home.name
         self.root = Path(self.tmp.name)
         quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        subprocess.check_call(["git", "init", "-q", "-b", "main"], **quiet)
+        subprocess.check_call(["git", "init", "-q", "-b", "develop"], **quiet)
         subprocess.check_call(["git", "config", "user.email", "kensa@example.com"], **quiet)
         subprocess.check_call(["git", "config", "user.name", "Kensa Test"], **quiet)
         source = self.root / "src"
@@ -226,6 +229,7 @@ class HttpTests(unittest.TestCase):
         page = urlopen(self.base + "/").read().decode("utf-8")
         self.assertIn("Kensa", page)
         snap = self.get("/api/snapshot?repo=" + self.repo)
+        self.assertEqual(snap["base"], DEFAULT_BASE_BRANCH)
         self.assertEqual(snap["changes"][0]["path"], "src/app.py")
         opened = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
         self.assertIn("return 2", opened["content"])
@@ -253,13 +257,14 @@ class HttpTests(unittest.TestCase):
 
     def test_branch_review(self):
         quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "branch", "main"], **quiet)
         subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
         self.file.write_text("def answer():\n    return 2\n")
         subprocess.check_call(["git", "add", "src/app.py"], **quiet)
         subprocess.check_call(["git", "commit", "-q", "-m", "change"], **quiet)
-        subprocess.check_call(["git", "checkout", "-q", "main"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "develop"], **quiet)
         info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
-        self.assertEqual(info["baseLabel"], "main")
+        self.assertEqual(info["baseLabel"], "develop")
         self.assertFalse(info["checkedOut"])
         self.assertEqual(info["files"][0]["path"], "src/app.py")
         opened = self.get("/api/branch/file?repo=%s&name=feature&path=src/app.py" % self.repo)
@@ -268,6 +273,51 @@ class HttpTests(unittest.TestCase):
         self.assertTrue(any(row["kind"] == "add" for row in opened["rows"]))
         changed = [pair for pair in opened["pairs"] if pair["oldText"] == "    return 1"]
         self.assertEqual(changed[0]["newText"], "    return 2")
+
+    def test_one_off_base_compares_those_two_branches(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "--", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "release"], **quiet)
+        self.file.write_text("def answer():\n    return 9\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "release"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 4\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "feature"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "develop"], **quiet)
+        info = self.get("/api/branch?repo=%s&name=feature&base=release" % self.repo)
+        self.assertEqual(info["baseLabel"], "release")
+        opened = self.get("/api/branch/file?repo=%s&name=feature&path=src/app.py&base=release" % self.repo)
+        changed = [pair for pair in opened["pairs"] if pair["newText"] == "    return 4"]
+        self.assertEqual(changed[0]["oldText"], "    return 9")
+        saved = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(saved["baseLabel"], "develop")
+
+    def test_snapshot_includes_committed_and_uncommitted(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "change"], **quiet)
+        self.file.write_text("def answer():\n    return 3\n")
+        (self.root / "src" / "extra.py").write_text("extra = 1\n")
+        snap = self.get("/api/snapshot?repo=" + self.repo)
+        paths = {item["path"] for item in snap["changes"]}
+        self.assertEqual(snap["base"], "develop")
+        self.assertIn("src/app.py", paths)
+        self.assertIn("src/extra.py", paths)
+        opened = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
+        changed = [pair for pair in opened["pairs"] if pair["oldText"] == "    return 1"]
+        self.assertEqual(changed[0]["newText"], "    return 3")
+
+    def test_saved_base_branch_is_the_comparison(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "edit"], **quiet)
+        subprocess.check_call(["git", "branch", "main"], **quiet)
+        save_base_branch("main")
+        snap = self.get("/api/snapshot?repo=" + self.repo)
+        self.assertEqual(snap["base"], "main")
 
     def test_quick_open_and_jump(self):
         files = self.get("/api/files?repo=%s&q=app.py" % self.repo)
@@ -326,6 +376,19 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(f"{COMMAND} feature", stderr.getvalue())
 
+    def test_one_off_base_is_a_second_argument(self):
+        with patch("kensa.cli.open_screen", return_value="http://127.0.0.1:4317/") as opened, \
+             patch("sys.stdout", io.StringIO()):
+            code = cli_main(["feature", "release"])
+        self.assertEqual(code, 0)
+        self.assertEqual(opened.call_args.args[1], "feature")
+        self.assertEqual(opened.call_args.args[2], "release")
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            refused = cli_main(["feature", "release", "extra"])
+        self.assertEqual(refused, 1)
+        self.assertIn("[base]", stderr.getvalue())
+
 
 class McpTests(unittest.TestCase):
     def test_initialize_and_tools(self):
@@ -351,7 +414,10 @@ class McpTests(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": OPEN_REVIEW_TOOL, "arguments": {"repo": str(root), "branch": "feature"}},
+                "params": {
+                    "name": OPEN_REVIEW_TOOL,
+                    "arguments": {"repo": str(root), "branch": "feature", "base": "release"},
+                },
             }
             output = io.BytesIO()
             with patch("kensa.cli._ensure_server"), patch("kensa.cli.webbrowser.open") as opened:
@@ -359,6 +425,7 @@ class McpTests(unittest.TestCase):
             decoded = _frames(output.getvalue())
             url = json.loads(decoded[0]["result"]["content"][0]["text"])["url"]
             self.assertIn("branch=feature", url)
+            self.assertIn("base=release", url)
             self.assertEqual(opened.call_args.args[0], url)
 
 
@@ -382,11 +449,14 @@ class SetupTests(unittest.TestCase):
 
 
 class ReviewerSetupTests(unittest.TestCase):
-    def test_setup_prompt_arg(self):
-        self.assertIsNone(setup_prompt_arg([]))
-        self.assertEqual(setup_prompt_arg(["--prompt", "look here"]), "look here")
+    def test_setup_options(self):
+        self.assertEqual(setup_options([]), (None, None))
+        self.assertEqual(setup_options(["--prompt", "look here", "--base", "main"]), ("look here", "main"))
+        self.assertEqual(setup_options(["--base", "main", "--prompt", "look here"]), ("look here", "main"))
         with self.assertRaises(RepoError):
-            setup_prompt_arg(["--prompt"])
+            setup_options(["--prompt"])
+        with self.assertRaises(RepoError):
+            setup_options(["--nope"])
 
     def test_read_review_prompt(self):
         self.assertEqual(read_review_prompt(None, io.StringIO("")), DEFAULT_REVIEW_PROMPT)
@@ -399,6 +469,18 @@ class ReviewerSetupTests(unittest.TestCase):
             self.assertEqual(read_review_prompt(None, custom), "look here")
         with self.assertRaises(RepoError):
             read_review_prompt("x" * 201, io.StringIO(""))
+
+    def test_read_base_branch(self):
+        self.assertEqual(read_base_branch(None, io.StringIO("")), DEFAULT_BASE_BRANCH)
+        tty = io.StringIO("\n")
+        tty.isatty = lambda: True
+        custom = io.StringIO("main\n")
+        custom.isatty = lambda: True
+        with patch("sys.stdout", io.StringIO()):
+            self.assertEqual(read_base_branch(None, tty), DEFAULT_BASE_BRANCH)
+            self.assertEqual(read_base_branch(None, custom), "main")
+        with self.assertRaises(RepoError):
+            read_base_branch("not a branch", io.StringIO(""))
 
     def test_installs_grok_and_claude_reviewer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -455,14 +537,18 @@ class ReviewerSetupTests(unittest.TestCase):
              patch("kensa.cli.install_reviewer", return_value=["reviewer"]) as reviewer, \
              patch("kensa.cli.install", return_value=["mcp"]), \
              patch("kensa.cli.discover", return_value=Path("/tmp/repo")), \
+             patch("kensa.cli.save_base_branch") as saved, \
              patch("sys.stdin", io.StringIO("")), \
-             patch("sys.stdout", io.StringIO()):
-            code = cli_main(["setup", "--prompt", "look here"])
+             patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            code = cli_main(["setup", "--prompt", "look here", "--base", "main"])
             default_code = cli_main(["setup"])
+        self.assertIn(f"Setup complete. Run {COMMAND} in a repository to open a review.", stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(default_code, 0)
         self.assertEqual(reviewer.call_args_list[0].args[0], "look here")
         self.assertEqual(reviewer.call_args_list[1].args[0], DEFAULT_REVIEW_PROMPT)
+        self.assertEqual(saved.call_args_list[0].args[0], "main")
+        self.assertEqual(saved.call_args_list[1].args[0], DEFAULT_BASE_BRANCH)
         stderr = io.StringIO()
         with patch("sys.stderr", stderr):
             refused = cli_main(["setup", "--nope"])

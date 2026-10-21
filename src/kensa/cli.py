@@ -14,9 +14,16 @@ from urllib.parse import quote
 from kensa.constants import COMMAND, HOST, PORT, SERVER_FILE, VERSION
 from kensa.gitrepo import RepoError, discover
 from kensa.mcp_server import serve_stdio
-from kensa.paths import kensa_home
+from kensa.paths import kensa_home, save_base_branch
 from kensa.server import serve
-from kensa.setup_agents import install, install_command, install_reviewer, read_review_prompt, setup_prompt_arg
+from kensa.setup_agents import (
+    install,
+    install_command,
+    install_reviewer,
+    read_base_branch,
+    read_review_prompt,
+    setup_options,
+)
 
 
 def main(argv=None):
@@ -47,7 +54,9 @@ def _main(argv):
         return 0
     if command == "setup":
         try:
-            prompt = read_review_prompt(setup_prompt_arg(argv[1:]), sys.stdin)
+            prompt_given, base_given = setup_options(argv[1:])
+            prompt = read_review_prompt(prompt_given, sys.stdin)
+            base = read_base_branch(base_given, sys.stdin)
         except RepoError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -55,33 +64,41 @@ def _main(argv):
             print(note)
         for note in install_reviewer(prompt):
             print(note)
+        save_base_branch(base)
+        print(f"Comparison branch: {base}")
         for note in install(discover(Path.cwd())):
             print(note)
+        print(f"Setup complete. Run {COMMAND} in a repository to open a review.")
         return 0
     if command == "pr":
         print(f"Pass a branch name. Example: {COMMAND} feature", file=sys.stderr)
         return 1
-    if len(argv) != 1:
-        print(_help(), file=sys.stderr)
-        return 1
-    _open_tab(Path.cwd(), branch=command)
-    return 0
+    if len(argv) == 1:
+        _open_tab(Path.cwd(), branch=command)
+        return 0
+    if len(argv) == 2:
+        _open_tab(Path.cwd(), branch=command, base=argv[1])
+        return 0
+    print(_help(), file=sys.stderr)
+    return 1
 
 
-def open_screen(start, branch=None):
+def open_screen(start, branch=None, base=None):
     """Start the server if needed and open the review screen. Returns the URL."""
     root = discover(start)
     _ensure_server()
     query = f"repo={quote(str(root))}"
     if branch:
         query += f"&branch={quote(branch)}"
+    if base:
+        query += f"&base={quote(base)}"
     url = f"http://{HOST}:{PORT}/?{query}"
     webbrowser.open(url)
     return url
 
 
-def _open_tab(start, branch=None):
-    print(open_screen(start, branch))
+def _open_tab(start, branch=None, base=None):
+    print(open_screen(start, branch, base))
 
 
 def _ensure_server():
@@ -132,9 +149,10 @@ def _help():
     return (
         f"{COMMAND} opens Kensa changes in a browser tab.\n"
         "\n"
-        f"  {COMMAND}                 Inspect uncommitted changes\n"
-        f"  {COMMAND} <branch>        Inspect that branch against the default branch\n"
-        f"  {COMMAND} setup [--prompt <phrase>]  Install {COMMAND} and set the reviewer\n"
+        f"  {COMMAND}                 Inspect changes against the comparison branch\n"
+        f"  {COMMAND} <branch> [base]  Inspect that branch against base, or the saved comparison branch\n"
+        f"  {COMMAND} setup [--prompt <phrase>] [--base <branch>]\n"
+        f"                        Install {COMMAND} and set the reviewer\n"
         f"  {COMMAND} serve           Run the server in the foreground\n"
         f"  {COMMAND} mcp             Speak MCP on stdin. Agents launch this.\n"
         f"{record}"

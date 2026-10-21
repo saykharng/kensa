@@ -18,10 +18,16 @@ const COMMENT_MOVED = "moved";
 const SEVERITY_LABEL = "Severity";
 const PANE_OLD = "old";
 const PANE_NEW = "new";
+const COMPARED_WITH = "Compared with ";
+const MATCHES_BRANCH = "This branch matches ";
+const MATCHES_BASE = "Working tree matches ";
+const NO_CHANGES_AGAINST = "No changes against ";
 
 const state = {
   repo: "",
   branch: "",
+  base: "",
+  oneOffBase: "",
   pollMs: 1000,
   hold: false,
   changes: [],
@@ -42,6 +48,18 @@ function query() {
   const params = new URLSearchParams(window.location.search);
   state.repo = params.get("repo") || "";
   state.branch = params.get("branch") || "";
+  state.oneOffBase = params.get("base") || "";
+}
+
+function branchQuery(path) {
+  let query = repoQuery() + "&name=" + encodeURIComponent(state.branch);
+  if (state.oneOffBase) {
+    query += "&base=" + encodeURIComponent(state.oneOffBase);
+  }
+  if (path) {
+    query += "&path=" + encodeURIComponent(path);
+  }
+  return query;
 }
 
 function repoQuery() {
@@ -94,7 +112,7 @@ async function boot() {
     const health = await api("/api/health");
     state.pollMs = health.pollMs || state.pollMs;
     if (state.branch) {
-      state.branchMeta = await api("/api/branch?" + repoQuery() + "&name=" + encodeURIComponent(state.branch));
+      state.branchMeta = await api("/api/branch?" + branchQuery());
       showBranch();
     }
     await refresh();
@@ -103,7 +121,10 @@ async function boot() {
       await openPath(first, null, false);
     } else {
       $("code").replaceChildren();
-      $("code").append(el("p", "empty", state.branch ? "This branch matches " + state.branchMeta.baseLabel + "." : "No changes against HEAD."));
+      const empty = state.branch
+        ? MATCHES_BRANCH + state.branchMeta.baseLabel + "."
+        : NO_CHANGES_AGAINST + state.base + ".";
+      $("code").append(el("p", "empty", empty));
     }
   } catch (error) {
     notice(error.message);
@@ -112,6 +133,14 @@ async function boot() {
     refresh().catch((error) => notice(error.message));
   }, state.pollMs);
   bind();
+}
+
+function showCompared(base) {
+  const bar = $("pr-bar");
+  bar.hidden = false;
+  $("pr-title").textContent = COMPARED_WITH + base;
+  $("submit-controls").hidden = true;
+  $("list-heading").textContent = "Changes";
 }
 
 function showBranch() {
@@ -131,6 +160,8 @@ async function refresh() {
   state.hunks = snap.hunks;
   if (!state.branch) {
     state.changes = snap.changes;
+    state.base = snap.base || state.base;
+    showCompared(state.base);
   }
   $("hold").textContent = state.hold ? "Holding" : "Hold";
   $("hold").classList.toggle("is-holding", state.hold);
@@ -165,7 +196,10 @@ function renderSidebar() {
   list.replaceChildren();
   const rows = state.branch ? state.branchMeta.files : state.changes;
   if (!rows.length) {
-    list.append(el("li", "meta", state.branch ? "This branch matches " + state.branchMeta.baseLabel + "." : "Working tree matches HEAD."));
+    const empty = state.branch
+      ? MATCHES_BRANCH + state.branchMeta.baseLabel + "."
+      : MATCHES_BASE + state.base + ".";
+    list.append(el("li", "meta", empty));
     return;
   }
   rows.forEach((item) => {
@@ -208,7 +242,7 @@ async function openPath(path, line, push) {
   }
   const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
   const url = onBranch
-    ? "/api/branch/file?" + repoQuery() + "&name=" + encodeURIComponent(state.branch) + "&path=" + encodeURIComponent(path)
+    ? "/api/branch/file?" + branchQuery(path)
     : "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path);
   state.file = await api(url);
   state.editing = false;
@@ -739,11 +773,15 @@ function bind() {
   });
 
   $("submit-pr").addEventListener("click", () => {
-    post("/api/branch/submit", {
+    const payload = {
       name: state.branch,
       verdict: $("verdict").value,
       summary: $("summary").value,
-    }).then((result) => {
+    };
+    if (state.oneOffBase) {
+      payload.base = state.oneOffBase;
+    }
+    post("/api/branch/submit", payload).then((result) => {
       notice("Submitted " + result.inline + " inline comments. " + (result.url || ""));
     }).catch((error) => notice(error.message));
   });

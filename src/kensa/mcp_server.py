@@ -16,7 +16,11 @@ _TOOLS = (
             "type": "object",
             "properties": {
                 "repo": {"type": "string", "description": "Repository path. Defaults to the working directory."},
-                "branch": {"type": "string", "description": "Branch to open. Omit for uncommitted changes."},
+                "branch": {"type": "string", "description": "Branch to open. Omit for the working tree."},
+                "base": {
+                    "type": "string",
+                    "description": "One-off comparison branch. Omit to use the branch saved at setup.",
+                },
             },
         },
     },
@@ -109,7 +113,10 @@ def _call_tool(name, arguments):
         branch = arguments.get("branch")
         if isinstance(branch, str):
             branch = branch.strip() or None
-        url = open_screen(arguments.get("repo") or Path.cwd(), branch)
+        base = arguments.get("base")
+        if isinstance(base, str):
+            base = base.strip() or None
+        url = open_screen(arguments.get("repo") or Path.cwd(), branch, base)
         return json.dumps({"url": url})
     root = repository(arguments.get("repo") or Path.cwd())
     if name == "review_open":

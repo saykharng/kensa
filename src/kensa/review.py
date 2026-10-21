@@ -17,14 +17,18 @@ from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT
 from kensa.diff import align_panes, hunk_anchors, old_lines_from_hunks, render_document
 from kensa.gitrepo import (
     RepoError,
+    base_label,
     branch_hunks,
     branch_overview,
     changed_files,
+    comparison_ref,
     content_hash,
+    default_base,
     diff_hunks,
     discover,
     ensure_notes_ignored,
     file_blob,
+    has_head,
     list_paths,
     safe_path,
     search_symbol,
@@ -32,7 +36,7 @@ from kensa.gitrepo import (
     write_worktree_file,
 )
 from kensa.outline import outline, rank_hits
-from kensa.paths import comments_path, open_md_path
+from kensa.paths import base_branch_name, comments_path, open_md_path
 
 
 def repository(start):
@@ -53,6 +57,7 @@ def snapshot(root):
     return {
         "repo": str(root.resolve()),
         "hold": bool(state.get("hold")),
+        "base": _worktree_base_label(root),
         "changes": changes,
         "comments": _place_all(root, state),
         "hunks": state.get("hunks") or [],
@@ -94,7 +99,7 @@ def open_file(root, relative):
         "hash": digest,
         "rows": rows,
         "deletions": deletions,
-        "pairs": _pairs(root, relative, status, text, binary, old_path, "HEAD"),
+        "pairs": _pairs(root, relative, status, text, binary, old_path, _worktree_ref(root)),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
     }
@@ -179,20 +184,20 @@ def jump(root, symbol):
     return rank_hits(symbol, hits)[:JUMP_LIMIT]
 
 
-def open_branch(root, name):
-    """Diff of a branch against the default branch, for reviewing someone else."""
+def open_branch(root, name, base_name=None):
+    """Diff of a branch against the comparison branch, or a one-off base."""
     from kensa.pull_request import find_pull_request
 
-    overview = branch_overview(Path(root), name)
+    overview = branch_overview(Path(root), name, base_name)
     overview["pullRequest"] = find_pull_request(Path(root), overview["resolved"])
     return overview
 
 
-def open_branch_file(root, name, relative):
+def open_branch_file(root, name, relative, base_name=None):
     """Whole file at the branch tip, with that branch's diff highlighted."""
     root = Path(root)
     safe_path(root, relative)
-    overview = branch_overview(root, name)
+    overview = branch_overview(root, name, base_name)
     known = next((item for item in overview["files"] if item["path"] == relative), None)
     if known is None:
         raise RepoError("that file did not change on this branch")
@@ -355,6 +360,18 @@ def _document(text, binary, hunks, status):
         return {"rows": rows, "deletions": []}
     rows, deletions = render_document(lines, hunks)
     return {"rows": rows, "deletions": deletions}
+
+
+def _worktree_ref(root):
+    if has_head(root):
+        return comparison_ref(root)
+    return "HEAD"
+
+
+def _worktree_base_label(root):
+    if has_head(root):
+        return base_label(default_base(root))
+    return base_branch_name()
 
 
 def _state(root):

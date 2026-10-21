@@ -11,6 +11,7 @@ from kensa.constants import (
     AGENT_GROK,
     BUNDLED_REVIEW_SKILL,
     COMMAND,
+    DEFAULT_BASE_BRANCH,
     DEFAULT_REVIEW_PROMPT,
     OPEN_REVIEW_TOOL,
     PATH_LINE,
@@ -19,7 +20,7 @@ from kensa.constants import (
     REVIEWER_SKILL,
     USER_BIN,
 )
-from kensa.gitrepo import RepoError
+from kensa.gitrepo import RepoError, valid_base_branch
 
 LAUNCHER_MARK = "from kensa.cli import main"
 
@@ -159,13 +160,27 @@ def _toml_string(value):
     return f'"{escaped}"'
 
 
-def setup_prompt_arg(argv):
-    """Return the phrase passed to setup, or None when setup should ask."""
-    if not argv:
-        return None
-    if len(argv) == 2 and argv[0] == "--prompt":
-        return argv[1]
-    raise RepoError(f"Use {COMMAND} setup or {COMMAND} setup --prompt <phrase>")
+def setup_options(argv):
+    """Return (prompt, base) from setup flags. None means setup should ask."""
+    prompt = None
+    base = None
+    index = 0
+    usage = f"Use {COMMAND} setup [--prompt <phrase>] [--base <branch>]"
+    while index < len(argv):
+        flag = argv[index]
+        if flag not in ("--prompt", "--base") or index + 1 >= len(argv):
+            raise RepoError(usage)
+        value = argv[index + 1]
+        if flag == "--prompt":
+            if prompt is not None:
+                raise RepoError(usage)
+            prompt = value
+        else:
+            if base is not None:
+                raise RepoError(usage)
+            base = value
+        index += 2
+    return prompt, base
 
 
 def valid_review_prompt(prompt):
@@ -195,6 +210,23 @@ def read_review_prompt(given, stdin):
     if line.strip() == "":
         return DEFAULT_REVIEW_PROMPT
     return valid_review_prompt(line)
+
+
+def read_base_branch(given, stdin):
+    """Use --base, else ask on a terminal, else develop."""
+    if given is not None:
+        return valid_base_branch(given)
+    if not stdin.isatty():
+        return DEFAULT_BASE_BRANCH
+    print(
+        f"Branch to compare against [{DEFAULT_BASE_BRANCH}]: ",
+        end="",
+        flush=True,
+    )
+    line = stdin.readline()
+    if line.strip() == "":
+        return DEFAULT_BASE_BRANCH
+    return valid_base_branch(line)
 
 
 def detect_review_agents(home):
@@ -254,7 +286,7 @@ def reviewer_skill(name, prompt):
         f"name: {name}\n"
         f"description: {_yaml_quote(description)}\n"
         f"when-to-use: {_yaml_quote(when)}\n"
-        'argument-hint: "[branch]"\n'
+        'argument-hint: "[branch] [base]"\n'
         "user-invocable: true\n"
         "metadata:\n"
         f"  kensa: {REVIEWER_MARKER}\n"
@@ -298,6 +330,7 @@ def _skill_body(prompt):
         f"When the user says {prompt}, or asks for a review, call the Kensa tool `{OPEN_REVIEW_TOOL}`.\n"
         "\n"
         "Pass `branch` when they named a branch.\n"
+        "Pass `base` when they name a comparison branch for this review only.\n"
         "\n"
         "The tool opens the review screen. Stop there.\n"
     )

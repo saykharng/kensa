@@ -125,18 +125,23 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"hits": jump(root, _required(query, "symbol"))})
             return
         if method == "GET" and path == "/api/branch":
-            self._json(open_branch(root, _required(query, "name")))
+            self._json(open_branch(root, _required(query, "name"), _one(query, "base")))
             return
         if method == "GET" and path == "/api/branch/file":
             self._json(
-                open_branch_file(root, _required(query, "name"), _required(query, "path"))
+                open_branch_file(
+                    root,
+                    _required(query, "name"),
+                    _required(query, "path"),
+                    _one(query, "base"),
+                )
             )
             return
         if method == "POST" and path == "/api/branch/submit":
             from kensa.pull_request import find_pull_request, submit_pull_request
             from kensa.review import agent_view
 
-            overview = open_branch(root, body.get("name") or "")
+            overview = open_branch(root, body.get("name") or "", body.get("base"))
             pull = overview.get("pullRequest") or find_pull_request(root, overview["resolved"])
             if not pull:
                 raise RepoError("this branch has no GitHub pull request to submit")
