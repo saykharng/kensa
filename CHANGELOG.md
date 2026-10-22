@@ -10,7 +10,7 @@ once it ships releases.
 
 ### Changed
 
-- The install instructions are a prompt to paste into Claude. It names the repository and `python3 bin/kc setup`.
+- The install instructions are a prompt to paste into a coding agent. It names the repository and `python3 bin/kc setup`.
 - The review header shows the subject, the base, the merge-base, the commit count, and the file count.
 - The comparison base is chosen per branch. The upstream is used when it names a different branch. Otherwise the nearest of the saved branch, `develop`, `main`, `master`, and `trunk` is used. An explicit base still applies to that run only.
 - Files that changed only in merge commits are left out. The header counts those merges.

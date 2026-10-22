@@ -4,7 +4,7 @@ Review code changes locally. Install Kensa, then let your agent run `kc`. It ope
 
 ## Install
 
-Paste this to Claude:
+Paste this into your coding agent:
 
 ```text
 Setup Kensa from https://github.com/saykharng/kensa using command `python3 bin/kc setup`.
