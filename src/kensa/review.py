@@ -13,68 +13,83 @@ from kensa.comments import (
     save_state,
     set_hunk,
 )
-from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT
+from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT, SCOPE_ALL
 from kensa.diff import align_panes, hunk_anchors, old_lines_from_hunks, render_document
 from kensa.gitrepo import (
     RepoError,
-    base_label,
     branch_hunks,
     branch_overview,
     changed_files,
-    comparison_ref,
     content_hash,
-    default_base,
     diff_hunks,
     discover,
     ensure_notes_ignored,
     file_blob,
-    has_head,
     list_paths,
     safe_path,
     search_symbol,
     show_ref_text,
+    worktree_span,
     write_worktree_file,
 )
 from kensa.outline import outline, rank_hits
-from kensa.paths import base_branch_name, comments_path, open_md_path
+from kensa.paths import comments_path, open_md_path
 
 
 def repository(start):
     return discover(start)
 
 
-def snapshot(root):
+def snapshot(root, commit=None, scope=None):
     root = Path(root)
     state = _state(root)
+    span = worktree_span(root, commit=commit, scope=scope)
     changes = []
-    for change in changed_files(root):
+    for change in span["files"]:
         item = dict(change)
         try:
             item["hash"] = content_hash(root, change["path"], change["status"])
         except RepoError:
             item["hash"] = ""
+        item["binary"] = _binary_flag(root, change["path"], change["status"])
         changes.append(item)
-    return {
+    payload = {
         "repo": str(root.resolve()),
         "hold": bool(state.get("hold")),
-        "base": _worktree_base_label(root),
+        "base": span["baseLabel"],
         "changes": changes,
         "comments": _place_all(root, state),
         "hunks": state.get("hunks") or [],
     }
+    payload.update(_range_payload(span))
+    return payload
 
 
-def open_file(root, relative):
+def open_file(root, relative, commit=None, scope=None):
     root = Path(root)
     safe_path(root, relative)
     state = _state(root)
-    changes = {item["path"]: item for item in changed_files(root)}
-    known = changes.get(relative)
+    span = worktree_span(root, commit=commit, scope=scope)
+    known = next((item for item in span["files"] if item["path"] == relative), None)
     status = known["status"] if known else "context"
-    text, binary = _text(root, relative, status)
+    commit_view = bool(span["commitSha"]) and known is not None
+    if commit_view and span["editTip"] and status != "D":
+        text, binary = file_blob(root, relative, "M")
+        editable = not binary
+    elif commit_view:
+        ref = span["pairRef"] if status == "D" else span["commitSha"]
+        text, binary = show_ref_text(root, ref, relative)
+        editable = False
+    else:
+        text, binary = _text(root, relative, status)
+        editable = status != "D" and not binary
     lines = [] if binary else text.splitlines()
-    hunks = [] if status == "context" else diff_hunks(root, relative, status)
-    editable = status != "D" and not binary
+    if status == "context" or binary:
+        hunks = []
+    elif commit_view and not span["editTip"]:
+        hunks = diff_hunks(root, relative, status, span["diffLeft"], span["diffRight"])
+    else:
+        hunks = diff_hunks(root, relative, status, span["pairRef"])
     if binary:
         rows, deletions = [], []
     elif status == "D":
@@ -99,7 +114,7 @@ def open_file(root, relative):
         "hash": digest,
         "rows": rows,
         "deletions": deletions,
-        "pairs": _pairs(root, relative, status, text, binary, old_path, _worktree_ref(root)),
+        "pairs": _pairs(root, relative, status, text, binary, old_path, span["pairRef"]),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
     }
@@ -184,33 +199,52 @@ def jump(root, symbol):
     return rank_hits(symbol, hits)[:JUMP_LIMIT]
 
 
-def open_branch(root, name, base_name=None):
-    """Diff of a branch against the comparison branch, or a one-off base."""
+def open_branch(root, name, base_name=None, commit=None, scope=None):
+    """Diff of a branch against its inferred base, or a one-off base."""
     from kensa.pull_request import find_pull_request
 
-    overview = branch_overview(Path(root), name, base_name)
+    overview = branch_overview(Path(root), name, base_name, commit=commit, scope=scope)
     overview["pullRequest"] = find_pull_request(Path(root), overview["resolved"])
     return overview
 
 
-def open_branch_file(root, name, relative, base_name=None):
-    """Whole file at the branch tip, with that branch's diff highlighted."""
+def open_branch_file(root, name, relative, base_name=None, commit=None, scope=None):
+    """Whole file at the branch tip, or at one commit, with that diff highlighted."""
     root = Path(root)
     safe_path(root, relative)
-    overview = branch_overview(root, name, base_name)
+    overview = branch_overview(root, name, base_name, commit=commit, scope=scope)
     known = next((item for item in overview["files"] if item["path"] == relative), None)
     if known is None:
         raise RepoError("that file did not change on this branch")
     status = known["status"]
-    checked_out = overview["checkedOut"] and status != "D"
+    commit_view = bool(overview["commitSha"])
+    checked_out = overview["checkedOut"] and status != "D" and (not commit_view or overview["editTip"])
     if checked_out:
         text, binary = file_blob(root, relative, "M")
         source = "worktree"
+    elif commit_view:
+        ref = overview["pairRef"] if status == "D" else overview["commitSha"]
+        text, binary = show_ref_text(root, ref, relative)
+        source = "commit"
     else:
         ref = overview["base"] if status == "D" else overview["resolved"]
         text, binary = show_ref_text(root, ref, relative)
         source = "branch"
-    hunks = [] if binary else branch_hunks(root, overview["base"], overview["resolved"], relative)
+    if binary:
+        hunks = []
+    elif commit_view and not overview["editTip"]:
+        hunks = branch_hunks(
+            root,
+            overview["base"],
+            overview["resolved"],
+            relative,
+            overview["diffLeft"],
+            overview["diffRight"],
+        )
+    elif commit_view:
+        hunks = diff_hunks(root, relative, status, overview["diffLeft"])
+    else:
+        hunks = branch_hunks(root, overview["base"], overview["resolved"], relative)
     editable = checked_out and not binary
     document = _document(text, binary, hunks, status)
     state = _state(root)
@@ -233,7 +267,7 @@ def open_branch_file(root, name, relative, base_name=None):
             text,
             binary,
             known.get("oldPath"),
-            overview["base"],
+            overview["pairRef"] if commit_view else overview["base"],
         ),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
@@ -362,16 +396,43 @@ def _document(text, binary, hunks, status):
     return {"rows": rows, "deletions": deletions}
 
 
-def _worktree_ref(root):
-    if has_head(root):
-        return comparison_ref(root)
-    return "HEAD"
+def review_summary(root, branch=None, base_name=None, commit=None):
+    """Resolved range for the agent: base, merge-base, commit count, and file count."""
+    root = Path(root)
+    if branch:
+        info = branch_overview(root, branch, base_name, commit=commit)
+    else:
+        info = worktree_span(root, commit=commit)
+    summary = _range_payload(info)
+    summary["base"] = summary["baseLabel"]
+    summary["commit"] = summary["commit"] or None
+    return summary
 
 
-def _worktree_base_label(root):
-    if has_head(root):
-        return base_label(default_base(root))
-    return base_branch_name()
+def _range_payload(span):
+    return {
+        "subject": span["subject"],
+        "baseLabel": span["baseLabel"],
+        "baseRef": span["base"],
+        "baseSource": span["baseSource"],
+        "mergeBase": span["mergeBase"],
+        "mergeBaseShort": span["mergeBaseShort"],
+        "commits": span["commits"],
+        "commitCount": span["commitCount"],
+        "excludedMerges": span["excludedMerges"],
+        "commit": span["commit"],
+        "commitSubject": span["commitSubject"],
+        "fileCount": span["fileCount"],
+        "title": span["title"],
+    }
+
+
+def _binary_flag(root, relative, status):
+    try:
+        _, binary = file_blob(root, relative, status)
+    except RepoError:
+        return False
+    return binary
 
 
 def _state(root):
@@ -399,7 +460,7 @@ def _text(root, relative, status):
 
 def _place_all(root, state):
     cache = {}
-    changes = {item["path"]: item for item in changed_files(root)}
+    changes = {item["path"]: item for item in changed_files(root, scope=SCOPE_ALL)}
     placed = []
     for comment in state.get("comments") or []:
         path = comment.get("path")

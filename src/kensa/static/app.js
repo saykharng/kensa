@@ -18,16 +18,24 @@ const COMMENT_MOVED = "moved";
 const SEVERITY_LABEL = "Severity";
 const PANE_OLD = "old";
 const PANE_NEW = "new";
-const COMPARED_WITH = "Compared with ";
 const MATCHES_BRANCH = "This branch matches ";
 const MATCHES_BASE = "Working tree matches ";
 const NO_CHANGES_AGAINST = "No changes against ";
+const SCOPE_ALL = "all";
+const ALL_COMMITS = "All commits";
+const SHOW_FULL_FILE = "Full file";
+const SHOW_CHANGES = "Changes only";
+const PAIR_CONTEXT = "context";
+const LINE_HIDDEN = " line hidden";
+const LINES_HIDDEN = " lines hidden";
 
 const state = {
   repo: "",
   branch: "",
   base: "",
   oneOffBase: "",
+  commitChoice: "",
+  scope: "",
   pollMs: 1000,
   hold: false,
   changes: [],
@@ -40,6 +48,7 @@ const state = {
   selectedLine: null,
   draft: null,
   branchMeta: null,
+  fullFiles: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -49,6 +58,18 @@ function query() {
   state.repo = params.get("repo") || "";
   state.branch = params.get("branch") || "";
   state.oneOffBase = params.get("base") || "";
+  state.commitChoice = params.get("commit") || "";
+  state.scope = params.get("scope") || "";
+}
+
+function rangeQuery() {
+  if (state.commitChoice) {
+    return "&commit=" + encodeURIComponent(state.commitChoice);
+  }
+  if (state.scope) {
+    return "&scope=" + encodeURIComponent(state.scope);
+  }
+  return "";
 }
 
 function branchQuery(path) {
@@ -56,6 +77,7 @@ function branchQuery(path) {
   if (state.oneOffBase) {
     query += "&base=" + encodeURIComponent(state.oneOffBase);
   }
+  query += rangeQuery();
   if (path) {
     query += "&path=" + encodeURIComponent(path);
   }
@@ -113,7 +135,7 @@ async function boot() {
     state.pollMs = health.pollMs || state.pollMs;
     if (state.branch) {
       state.branchMeta = await api("/api/branch?" + branchQuery());
-      showBranch();
+      showRange(state.branchMeta);
     }
     await refresh();
     const first = state.branch ? (state.branchMeta.files[0] || {}).path : (state.changes[0] || {}).path;
@@ -135,33 +157,66 @@ async function boot() {
   bind();
 }
 
-function showCompared(base) {
+function showRange(meta) {
   const bar = $("pr-bar");
   bar.hidden = false;
-  $("pr-title").textContent = COMPARED_WITH + base;
-  $("submit-controls").hidden = true;
-  $("list-heading").textContent = "Changes";
+  $("pr-title").textContent = meta.title || "";
+  $("pr-title").title = meta.title || "";
+  renderCommitSelect(meta);
+  if (state.branch) {
+    $("list-heading").textContent = "Branch";
+    $("submit-controls").hidden = !meta.pullRequest;
+  } else {
+    $("list-heading").textContent = "Changes";
+    $("submit-controls").hidden = true;
+  }
 }
 
-function showBranch() {
-  const bar = $("pr-bar");
-  bar.hidden = false;
-  const meta = state.branchMeta;
-  const access = meta.checkedOut ? "checked out" : "read only";
-  $("pr-title").textContent = meta.name + " compared with " + meta.baseLabel + " · " + access;
-  $("list-heading").textContent = "Branch";
-  $("submit-controls").hidden = !meta.pullRequest;
+function renderCommitSelect(meta) {
+  const label = $("commit-label");
+  const select = $("commit-select");
+  const commits = meta.commits || [];
+  if (!commits.length) {
+    label.hidden = true;
+    return;
+  }
+  label.hidden = false;
+  const signature = commits.map((item) => item.short).join(" ");
+  if (select.dataset.signature !== signature) {
+    select.replaceChildren();
+    const all = document.createElement("option");
+    all.value = SCOPE_ALL;
+    all.textContent = ALL_COMMITS;
+    select.append(all);
+    commits.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.short;
+      option.textContent = item.short + " " + item.subject;
+      select.append(option);
+    });
+    select.dataset.signature = signature;
+  }
+  let next = SCOPE_ALL;
+  if (state.commitChoice) {
+    next = state.commitChoice;
+  } else if (state.scope !== SCOPE_ALL && meta.commit) {
+    next = meta.commit;
+  }
+  if (select.value !== next) {
+    select.value = next;
+  }
 }
 
 async function refresh() {
-  const snap = await api("/api/snapshot?" + repoQuery());
+  const snapQuery = state.branch ? repoQuery() : repoQuery() + rangeQuery();
+  const snap = await api("/api/snapshot?" + snapQuery);
   state.hold = snap.hold;
   state.comments = snap.comments;
   state.hunks = snap.hunks;
   if (!state.branch) {
     state.changes = snap.changes;
     state.base = snap.base || state.base;
-    showCompared(state.base);
+    showRange(snap);
   }
   $("hold").textContent = state.hold ? "Holding" : "Hold";
   $("hold").classList.toggle("is-holding", state.hold);
@@ -243,11 +298,14 @@ async function openPath(path, line, push) {
   const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
   const url = onBranch
     ? "/api/branch/file?" + branchQuery(path)
-    : "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path);
+    : "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path) + rangeQuery();
   state.file = await api(url);
   state.editing = false;
   state.dirty = false;
   state.selectedLine = line;
+  if (line) {
+    revealLine(line);
+  }
   $("back").disabled = state.stack.length === 0;
   renderFile();
   renderSidebar();
@@ -295,6 +353,7 @@ function renderFile() {
   $("cancel-edit").hidden = !state.editing;
   $("editor-wrap").hidden = !state.editing;
   $("code").hidden = state.editing;
+  updateFileFold(file);
   if (state.editing) {
     $("editor").value = file.content;
     return;
@@ -331,22 +390,29 @@ function renderFile() {
     code.append(lineThread(orphaned, null, false));
   }
   const commentOnOld = file.status === "D";
+  const draftLine = state.draft ? state.draft.line : null;
   let drafted = false;
-  pairs.forEach((pair) => {
-    const number = commentOnOld ? pair.oldNum : pair.newNum;
-    code.append(paneCell(PANE_OLD, pair, commentsAt, number, commentOnOld));
-    code.append(paneCell(PANE_NEW, pair, commentsAt, number, !commentOnOld));
-    if (number == null) {
+  visibleRuns(pairs, commentsAt, draftLine, commentOnOld, fileShowsFull(file)).forEach((run) => {
+    if (run.type === "fold") {
+      code.append(foldRow(run.count, run.line));
       return;
     }
-    const notes = commentsAt[number] || [];
-    const drafting = Boolean(state.draft && state.draft.line === number);
-    if (drafting) {
-      drafted = true;
-    }
-    if (notes.length || drafting) {
-      code.append(lineThread(notes, number, drafting));
-    }
+    run.pairs.forEach((pair) => {
+      const number = pairLine(pair, commentOnOld);
+      code.append(paneCell(PANE_OLD, pair, commentsAt, number, commentOnOld));
+      code.append(paneCell(PANE_NEW, pair, commentsAt, number, !commentOnOld));
+      if (number == null) {
+        return;
+      }
+      const notes = commentsAt[number] || [];
+      const drafting = draftLine === number;
+      if (drafting) {
+        drafted = true;
+      }
+      if (notes.length || drafting) {
+        code.append(lineThread(notes, number, drafting));
+      }
+    });
   });
   if (state.draft && !drafted) {
     code.append(lineThread([], state.draft.line, true));
@@ -359,6 +425,130 @@ function renderFile() {
       field.setSelectionRange(end, end);
     }
   }
+}
+
+function fileShowsFull(file) {
+  if (!file || file.status === "context" || file.inReview === false) {
+    return true;
+  }
+  return Boolean(state.fullFiles[file.path]);
+}
+
+function pairLine(pair, commentOnOld) {
+  return commentOnOld ? pair.oldNum : pair.newNum;
+}
+
+function pairStays(pair, commentsAt, draftLine, commentOnOld) {
+  if (pair.kind !== PAIR_CONTEXT) {
+    return true;
+  }
+  const line = pairLine(pair, commentOnOld);
+  if (line == null) {
+    return false;
+  }
+  if (line === draftLine) {
+    return true;
+  }
+  return Boolean(commentsAt[line] && commentsAt[line].length);
+}
+
+function visibleRuns(pairs, commentsAt, draftLine, commentOnOld, expanded) {
+  if (expanded) {
+    return [{ type: "lines", pairs: pairs }];
+  }
+  const runs = [];
+  let hidden = 0;
+  let hiddenLine = null;
+  let current = null;
+  function flushHidden() {
+    if (!hidden) {
+      return;
+    }
+    runs.push({ type: "fold", count: hidden, line: hiddenLine });
+    hidden = 0;
+    hiddenLine = null;
+  }
+  pairs.forEach((pair) => {
+    if (pairStays(pair, commentsAt, draftLine, commentOnOld)) {
+      flushHidden();
+      if (!current) {
+        current = { type: "lines", pairs: [] };
+        runs.push(current);
+      }
+      current.pairs.push(pair);
+      return;
+    }
+    current = null;
+    hidden += 1;
+    if (hiddenLine == null) {
+      hiddenLine = pairLine(pair, commentOnOld);
+    }
+  });
+  flushHidden();
+  return runs;
+}
+
+function fileCanFold(file) {
+  const pairs = (file && file.pairs) || [];
+  let changed = false;
+  let context = false;
+  pairs.forEach((pair) => {
+    if (pair.kind === PAIR_CONTEXT) {
+      context = true;
+    } else {
+      changed = true;
+    }
+  });
+  return changed && context;
+}
+
+function updateFileFold(file) {
+  const fold = $("file-fold");
+  const show = !state.editing && fileCanFold(file);
+  fold.hidden = !show;
+  if (!show) {
+    return;
+  }
+  const full = fileShowsFull(file);
+  fold.textContent = full ? SHOW_CHANGES : SHOW_FULL_FILE;
+  fold.setAttribute("aria-expanded", full ? "true" : "false");
+}
+
+function revealLine(line) {
+  if (!state.file || !line || fileShowsFull(state.file)) {
+    return false;
+  }
+  const commentOnOld = state.file.status === "D";
+  const pair = (state.file.pairs || []).find((item) => pairLine(item, commentOnOld) === line);
+  if (!pair || pair.kind !== PAIR_CONTEXT) {
+    return false;
+  }
+  state.fullFiles[state.file.path] = true;
+  return true;
+}
+
+function expandOpenFile(anchorLine) {
+  if (!state.file) {
+    return;
+  }
+  state.fullFiles[state.file.path] = true;
+  renderFile();
+  if (!anchorLine) {
+    return;
+  }
+  const node = document.getElementById("line-" + anchorLine);
+  if (node) {
+    node.scrollIntoView({ block: "center" });
+  }
+}
+
+function foldRow(count, anchorLine) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "fold";
+  button.textContent = count + (count === 1 ? LINE_HIDDEN : LINES_HIDDEN);
+  button.addEventListener("click", () => expandOpenFile(anchorLine));
+  return button;
 }
 
 function paneCell(side, pair, commentsAt, commentLine, ownsComment) {
@@ -577,6 +767,10 @@ function dismissComment(commentId) {
 
 function selectLine(line) {
   state.selectedLine = line;
+  if (revealLine(line)) {
+    renderFile();
+    return;
+  }
   document.querySelectorAll(".cell.selected").forEach((node) => node.classList.remove("selected"));
   const node = document.getElementById("line-" + line);
   if (node) {
@@ -690,6 +884,19 @@ function bind() {
     }).catch((error) => notice(error.message));
   });
 
+  $("file-fold").addEventListener("click", () => {
+    if (!state.file) {
+      return;
+    }
+    const path = state.file.path;
+    if (state.fullFiles[path]) {
+      delete state.fullFiles[path];
+    } else {
+      state.fullFiles[path] = true;
+    }
+    renderFile();
+  });
+
   $("back").addEventListener("click", () => {
     const previous = state.stack.pop();
     if (!previous) {
@@ -772,6 +979,18 @@ function bind() {
       .catch((error) => notice(error.message));
   });
 
+  $("commit-select").addEventListener("change", () => {
+    const value = $("commit-select").value;
+    if (value === SCOPE_ALL) {
+      state.commitChoice = "";
+      state.scope = SCOPE_ALL;
+    } else {
+      state.commitChoice = value;
+      state.scope = "";
+    }
+    reloadReview().catch((error) => notice(error.message));
+  });
+
   $("submit-pr").addEventListener("click", () => {
     const payload = {
       name: state.branch,
@@ -785,6 +1004,28 @@ function bind() {
       notice("Submitted " + result.inline + " inline comments. " + (result.url || ""));
     }).catch((error) => notice(error.message));
   });
+}
+
+async function reloadReview() {
+  if (state.branch) {
+    state.branchMeta = await api("/api/branch?" + branchQuery());
+    showRange(state.branchMeta);
+  }
+  await refresh();
+  const rows = state.branch ? state.branchMeta.files : state.changes;
+  const still = state.file && rows.some((item) => item.path === state.file.path);
+  if (still) {
+    await openPath(state.file.path, state.selectedLine, false);
+    return;
+  }
+  if (rows[0]) {
+    await openPath(rows[0].path, null, false);
+    return;
+  }
+  state.file = null;
+  const against = state.branch ? (state.branchMeta && state.branchMeta.baseLabel) || "" : state.base || "";
+  $("code").replaceChildren();
+  $("code").append(el("p", "empty", NO_CHANGES_AGAINST + against + "."));
 }
 
 function saveEditor() {

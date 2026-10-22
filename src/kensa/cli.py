@@ -15,6 +15,7 @@ from kensa.constants import COMMAND, HOST, PORT, SERVER_FILE, VERSION
 from kensa.gitrepo import RepoError, discover
 from kensa.mcp_server import serve_stdio
 from kensa.paths import kensa_home, save_base_branch
+from kensa.review import review_summary
 from kensa.server import serve
 from kensa.setup_agents import (
     install,
@@ -83,7 +84,7 @@ def _main(argv):
     return 1
 
 
-def open_screen(start, branch=None, base=None):
+def open_screen(start, branch=None, base=None, commit=None):
     """Start the server if needed and open the review screen. Returns the URL."""
     root = discover(start)
     _ensure_server()
@@ -92,13 +93,20 @@ def open_screen(start, branch=None, base=None):
         query += f"&branch={quote(branch)}"
     if base:
         query += f"&base={quote(base)}"
+    if commit:
+        query += f"&commit={quote(commit)}"
     url = f"http://{HOST}:{PORT}/?{query}"
     webbrowser.open(url)
     return url
 
 
 def _open_tab(start, branch=None, base=None):
-    print(open_screen(start, branch, base))
+    url = open_screen(start, branch, base)
+    try:
+        print(review_summary(discover(start), branch, base)["title"])
+    except RepoError:
+        pass
+    print(url)
 
 
 def _ensure_server():
@@ -149,8 +157,8 @@ def _help():
     return (
         f"{COMMAND} opens Kensa changes in a browser tab.\n"
         "\n"
-        f"  {COMMAND}                 Inspect changes against the comparison branch\n"
-        f"  {COMMAND} <branch> [base]  Inspect that branch against base, or the saved comparison branch\n"
+        f"  {COMMAND}                 Inspect changes. Upstream, else the nearest base\n"
+        f"  {COMMAND} <branch> [base]  Inspect that branch. Omit base to infer it\n"
         f"  {COMMAND} setup [--prompt <phrase>] [--base <branch>]\n"
         f"                        Install {COMMAND} and set the reviewer\n"
         f"  {COMMAND} serve           Run the server in the foreground\n"

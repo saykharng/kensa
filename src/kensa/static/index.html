@@ -40,6 +40,9 @@
   </header>
   <div id="pr-bar" class="pr-bar" hidden>
     <div id="pr-title"></div>
+    <label id="commit-label" class="inline-label" hidden>Commit
+      <select id="commit-select" aria-label="Commit"></select>
+    </label>
     <div id="submit-controls" hidden>
       <label>Verdict
         <select id="verdict">
@@ -75,6 +78,7 @@
         <div class="file-id">
           <span id="file-path"></span>
           <span id="file-flag" class="flag" hidden>Context</span>
+          <button type="button" id="file-fold" class="quiet" hidden aria-expanded="false">Full file</button>
         </div>
         <label class="inline-label">Outline
           <select id="outline"></select>

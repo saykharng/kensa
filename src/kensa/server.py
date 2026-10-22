@@ -83,10 +83,10 @@ class Handler(BaseHTTPRequestHandler):
         if root is None:
             raise RepoError("missing repo")
         if method == "GET" and path == "/api/snapshot":
-            self._json(snapshot(root))
+            self._json(snapshot(root, _one(query, "commit"), _one(query, "scope")))
             return
         if method == "GET" and path == "/api/file":
-            self._json(open_file(root, _required(query, "path")))
+            self._json(open_file(root, _required(query, "path"), _one(query, "commit"), _one(query, "scope")))
             return
         if method == "PUT" and path == "/api/file":
             self._json(save_file(root, body.get("path", ""), body.get("content")))
@@ -125,7 +125,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"hits": jump(root, _required(query, "symbol"))})
             return
         if method == "GET" and path == "/api/branch":
-            self._json(open_branch(root, _required(query, "name"), _one(query, "base")))
+            self._json(
+                open_branch(
+                    root,
+                    _required(query, "name"),
+                    _one(query, "base"),
+                    _one(query, "commit"),
+                    _one(query, "scope"),
+                )
+            )
             return
         if method == "GET" and path == "/api/branch/file":
             self._json(
@@ -134,6 +142,8 @@ class Handler(BaseHTTPRequestHandler):
                     _required(query, "name"),
                     _required(query, "path"),
                     _one(query, "base"),
+                    _one(query, "commit"),
+                    _one(query, "scope"),
                 )
             )
             return

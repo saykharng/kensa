@@ -201,12 +201,19 @@ html[data-theme="bright"] .theme-sun { display: none; }
 }
 
 #pr-title {
+  flex: 1;
   min-width: 0;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+#commit-label[hidden] { display: none; }
+
+#commit-label:not([hidden]) { flex: none; }
+
+#commit-select { width: 240px; max-width: 320px; }
 
 #submit-controls:not([hidden]) { gap: 8px; flex: 1; justify-content: flex-end; }
 
@@ -436,6 +443,8 @@ input:hover, select:hover, textarea:hover { border-color: var(--faint); }
   white-space: nowrap;
 }
 
+#file-fold { flex: none; }
+
 .flag {
   flex: none;
   height: 18px;
@@ -513,6 +522,24 @@ input:hover, select:hover, textarea:hover { border-color: var(--faint); }
 }
 
 .pane-label.new, .cell.new { border-left: 1px solid var(--border); }
+
+.fold {
+  grid-column: 1 / -1;
+  height: 28px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--raised);
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.fold:hover { color: var(--text); background: var(--raised); }
 
 .cell {
   display: grid;

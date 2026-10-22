@@ -8,6 +8,15 @@ once it ships releases.
 
 ## [Unreleased]
 
+### Changed
+
+- The review header shows the subject, the base, the merge-base, the commit count, and the file count.
+- The comparison base is chosen per branch. The upstream is used when it names a different branch. Otherwise the nearest of the saved branch, `develop`, `main`, `master`, and `trunk` is used. An explicit base still applies to that run only.
+- Files that changed only in merge commits are left out. The header counts those merges.
+- A branch with one non-merge commit opens that commit. The commit menu opens the whole range or another commit.
+- `open_review` returns the resolved base, merge-base, commit count, and file count with the URL.
+- A changed file opens on its changed lines. **Full file** shows the rest of that file in place, and **Changes only** returns to the diff.
+
 ### Added
 
 - Open source repository: MIT license, contributing guide, code of conduct, security policy, and issue templates.

@@ -21,11 +21,13 @@ python3 bin/kc setup --prompt "review my changes" --base main
 ## Review
 
 ```bash
-kc                                 # your changes against develop, committed or not
-kc their-branch                    # that branch against develop
+kc                                 # your changes, base inferred
+kc their-branch                    # that branch, base inferred
 kc their-branch the-other-branch   # that branch against the-other-branch, this once
 ```
 
-The second name is a one-off comparison. It does not change the branch saved at setup.
+The base is the branch upstream when that names a different branch. Otherwise it is whichever of the saved branch, `develop`, `main`, `master`, and `trunk` has the nearest merge-base. The second name is a one-off comparison and does not change the branch saved at setup.
+
+The header shows the base, the merge-base, the commit count, and the file count. Merge commits are left out. A branch with one non-merge commit opens that commit, and the commit menu can open another.
 
 [MIT](LICENSE). Copyright (c) 2026 Shekhar Gyanwali. See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).

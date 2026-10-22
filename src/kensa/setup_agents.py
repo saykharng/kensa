@@ -302,7 +302,7 @@ def reviewer_rule(prompt):
         "# Kensa\n"
         "\n"
         f'When the user says "{shown}" or asks for a review, call the Kensa tool `{OPEN_REVIEW_TOOL}`. '
-        "That opens the review screen.\n"
+        "That opens the review screen and returns the base, commit count, and file count it resolved.\n"
     )
 
 
@@ -331,6 +331,10 @@ def _skill_body(prompt):
         "\n"
         "Pass `branch` when they named a branch.\n"
         "Pass `base` when they name a comparison branch for this review only.\n"
+        "Pass `commit` when they name a commit. One non-merge commit opens that commit on its own.\n"
+        "\n"
+        "Read the tool result before reviewing. It returns the resolved base, mergeBase, commitCount, and fileCount.\n"
+        "A surprising base or a large file count means the range is wrong. Pass `base` or `commit` and call the tool again.\n"
         "\n"
         "The tool opens the review screen. Stop there.\n"
     )

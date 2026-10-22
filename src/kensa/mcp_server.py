@@ -6,12 +6,12 @@ from pathlib import Path
 
 from kensa.constants import MCP_PROTOCOL, OPEN_REVIEW_TOOL, PRODUCT_NAME, VERSION
 from kensa.gitrepo import RepoError
-from kensa.review import agent_view, repository, send
+from kensa.review import agent_view, repository, review_summary, send
 
 _TOOLS = (
     {
         "name": OPEN_REVIEW_TOOL,
-        "description": "Open the Kensa review screen. Call this when the user asks for a review. This only opens the screen.",
+        "description": "Open the Kensa review screen. Call this when the user asks for a review. Returns the url plus the resolved base, merge-base, commit count, and file count.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -19,7 +19,11 @@ _TOOLS = (
                 "branch": {"type": "string", "description": "Branch to open. Omit for the working tree."},
                 "base": {
                     "type": "string",
-                    "description": "One-off comparison branch. Omit to use the branch saved at setup.",
+                    "description": "One-off comparison branch. Omit to infer it: upstream if that names a different branch, otherwise the trunk with the nearest merge-base.",
+                },
+                "commit": {
+                    "type": "string",
+                    "description": "Review this one commit. Omit to review the branch. A branch with one non-merge commit opens that commit.",
                 },
             },
         },
@@ -116,8 +120,17 @@ def _call_tool(name, arguments):
         base = arguments.get("base")
         if isinstance(base, str):
             base = base.strip() or None
-        url = open_screen(arguments.get("repo") or Path.cwd(), branch, base)
-        return json.dumps({"url": url})
+        commit = arguments.get("commit")
+        if isinstance(commit, str):
+            commit = commit.strip() or None
+        root = arguments.get("repo") or Path.cwd()
+        url = open_screen(root, branch, base, commit)
+        payload = {"url": url}
+        try:
+            payload.update(review_summary(root, branch, base, commit))
+        except RepoError as exc:
+            payload["rangeError"] = str(exc)
+        return json.dumps(payload)
     root = repository(arguments.get("repo") or Path.cwd())
     if name == "review_open":
         sent = send(root)

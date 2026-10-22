@@ -230,6 +230,9 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Kensa", page)
         snap = self.get("/api/snapshot?repo=" + self.repo)
         self.assertEqual(snap["base"], DEFAULT_BASE_BRANCH)
+        self.assertEqual(snap["baseSource"], "saved")
+        self.assertIn("vs develop (merge-base ", snap["title"])
+        self.assertIn("1 file", snap["title"])
         self.assertEqual(snap["changes"][0]["path"], "src/app.py")
         opened = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
         self.assertIn("return 2", opened["content"])
@@ -265,8 +268,15 @@ class HttpTests(unittest.TestCase):
         subprocess.check_call(["git", "checkout", "-q", "develop"], **quiet)
         info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
         self.assertEqual(info["baseLabel"], "develop")
+        self.assertEqual(info["commitCount"], 1)
+        self.assertTrue(info["commit"])
+        self.assertIn("vs develop (merge-base ", info["title"])
+        self.assertIn(info["commit"], info["title"])
         self.assertFalse(info["checkedOut"])
         self.assertEqual(info["files"][0]["path"], "src/app.py")
+        whole = self.get("/api/branch?repo=%s&name=feature&scope=all" % self.repo)
+        self.assertEqual(whole["commit"], "")
+        self.assertEqual(whole["files"][0]["path"], "src/app.py")
         opened = self.get("/api/branch/file?repo=%s&name=feature&path=src/app.py" % self.repo)
         self.assertIn("return 2", opened["content"])
         self.assertFalse(opened["editable"])
@@ -304,6 +314,7 @@ class HttpTests(unittest.TestCase):
         snap = self.get("/api/snapshot?repo=" + self.repo)
         paths = {item["path"] for item in snap["changes"]}
         self.assertEqual(snap["base"], "develop")
+        self.assertEqual(snap["commit"], "")
         self.assertIn("src/app.py", paths)
         self.assertIn("src/extra.py", paths)
         opened = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
@@ -318,6 +329,96 @@ class HttpTests(unittest.TestCase):
         save_base_branch("main")
         snap = self.get("/api/snapshot?repo=" + self.repo)
         self.assertEqual(snap["base"], "main")
+
+    def test_nearest_trunk_is_the_base_and_merge_files_are_left_out(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "--", "src/app.py"], **quiet)
+        extra = self.root / "develop_only.py"
+        extra.write_text("develop\n")
+        subprocess.check_call(["git", "add", "develop_only.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "develop work"], **quiet)
+        subprocess.check_call(["git", "branch", "master", "HEAD~1"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "master"], **quiet)
+        subprocess.check_call(["git", "merge", "--no-ff", "--no-commit", "develop"], **quiet)
+        (self.root / "from_merge.py").write_text("merged\n")
+        subprocess.check_call(["git", "add", "from_merge.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "Develop to Master"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 5\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "real work"], **quiet)
+        inferred = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(inferred["baseLabel"], "master")
+        self.assertEqual(inferred["baseSource"], "inferred")
+        self.assertEqual(inferred["commitCount"], 1)
+        self.assertEqual(inferred["fileCount"], 1)
+        self.assertEqual(inferred["files"][0]["path"], "src/app.py")
+        self.assertTrue(inferred["mergeBaseShort"])
+        self.assertIn("vs master (merge-base " + inferred["mergeBaseShort"] + ")", inferred["title"])
+        self.assertIn("1 file", inferred["title"])
+        whole = self.get("/api/branch?repo=%s&name=feature&base=develop&scope=all" % self.repo)
+        self.assertEqual(whole["baseLabel"], "develop")
+        self.assertEqual(whole["baseSource"], "explicit")
+        self.assertEqual(whole["commit"], "")
+        self.assertEqual(whole["excludedMerges"], 1)
+        self.assertEqual([item["path"] for item in whole["files"]], ["src/app.py"])
+        self.assertIn("1 commit · 1 file", whole["title"])
+        self.assertIn("1 merge excluded", whole["title"])
+        one = self.get("/api/branch?repo=%s&name=feature&commit=%s" % (self.repo, inferred["commit"]))
+        self.assertEqual(one["commit"], inferred["commit"])
+        self.assertEqual([item["path"] for item in one["files"]], ["src/app.py"])
+
+    def test_upstream_is_the_base_when_it_names_another_branch(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "--", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "branch", "master"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 7\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "work"], **quiet)
+        subprocess.check_call(["git", "branch", "--set-upstream-to", "master"], **quiet)
+        info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(info["baseLabel"], "master")
+        self.assertEqual(info["baseSource"], "upstream")
+
+    def test_remote_of_the_same_branch_is_not_the_base(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "--", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 8\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "work"], **quiet)
+        subprocess.check_call(["git", "update-ref", "refs/remotes/origin/feature", "HEAD"], **quiet)
+        subprocess.check_call(["git", "config", "branch.feature.remote", "origin"], **quiet)
+        subprocess.check_call(["git", "config", "branch.feature.merge", "refs/heads/feature"], **quiet)
+        info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(info["baseLabel"], "develop")
+        self.assertNotEqual(info["baseSource"], "upstream")
+
+    def test_a_named_commit_limits_the_files(self):
+        quiet = {"cwd": self.root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.check_call(["git", "checkout", "-q", "--", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+        self.file.write_text("def answer():\n    return 4\n")
+        subprocess.check_call(["git", "add", "src/app.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "first"], **quiet)
+        (self.root / "src" / "extra.py").write_text("extra = 1\n")
+        subprocess.check_call(["git", "add", "src/extra.py"], **quiet)
+        subprocess.check_call(["git", "commit", "-q", "-m", "second"], **quiet)
+        info = self.get("/api/branch?repo=%s&name=feature" % self.repo)
+        self.assertEqual(info["commitCount"], 2)
+        self.assertEqual(info["commit"], "")
+        self.assertEqual(sorted(item["path"] for item in info["files"]), ["src/app.py", "src/extra.py"])
+        second = info["commits"][1]
+        self.assertEqual(second["subject"], "second")
+        one = self.get("/api/branch?repo=%s&name=feature&commit=%s" % (self.repo, second["short"]))
+        self.assertEqual([item["path"] for item in one["files"]], ["src/extra.py"])
+        opened = self.get(
+            "/api/branch/file?repo=%s&name=feature&path=src/extra.py&commit=%s" % (self.repo, second["short"])
+        )
+        self.assertIn("extra = 1", opened["content"])
+        with self.assertRaises(HTTPError):
+            self.get("/api/branch?repo=%s&name=feature&commit=zzzz" % self.repo)
 
     def test_quick_open_and_jump(self):
         files = self.get("/api/files?repo=%s&q=app.py" % self.repo)
@@ -427,6 +528,47 @@ class McpTests(unittest.TestCase):
             self.assertIn("branch=feature", url)
             self.assertIn("base=release", url)
             self.assertEqual(opened.call_args.args[0], url)
+            self.assertIn("rangeError", json.loads(decoded[0]["result"]["content"][0]["text"]))
+
+    def test_open_review_reports_the_resolved_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            quiet = {"cwd": root, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            subprocess.check_call(["git", "init", "-q", "-b", "develop"], **quiet)
+            subprocess.check_call(["git", "config", "user.email", "kensa@example.com"], **quiet)
+            subprocess.check_call(["git", "config", "user.name", "Kensa Test"], **quiet)
+            (root / "app.py").write_text("a = 1\n")
+            subprocess.check_call(["git", "add", "app.py"], **quiet)
+            subprocess.check_call(["git", "commit", "-q", "-m", "init"], **quiet)
+            subprocess.check_call(["git", "checkout", "-q", "-b", "master"], **quiet)
+            (root / "master.py").write_text("m = 1\n")
+            subprocess.check_call(["git", "add", "master.py"], **quiet)
+            subprocess.check_call(["git", "commit", "-q", "-m", "on master"], **quiet)
+            subprocess.check_call(["git", "checkout", "-q", "-b", "feature"], **quiet)
+            (root / "app.py").write_text("a = 2\n")
+            subprocess.check_call(["git", "add", "app.py"], **quiet)
+            subprocess.check_call(["git", "commit", "-q", "-m", "feature work"], **quiet)
+            call = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": OPEN_REVIEW_TOOL, "arguments": {"repo": str(root), "branch": "feature"}},
+            }
+            output = io.BytesIO()
+            with patch.dict(os.environ, {"KENSA_HOME": str(home)}), \
+                 patch("kensa.cli._ensure_server"), \
+                 patch("kensa.cli.webbrowser.open"):
+                serve_stdio(io.BytesIO(_frame(call)), output)
+            body = json.loads(_frames(output.getvalue())[0]["result"]["content"][0]["text"])
+            self.assertEqual(body["base"], "master")
+            self.assertEqual(body["baseSource"], "inferred")
+            self.assertEqual(body["commitCount"], 1)
+            self.assertEqual(body["fileCount"], 1)
+            self.assertTrue(body["mergeBase"])
+            self.assertIn("vs master (merge-base ", body["title"])
+            self.assertIn("branch=feature", body["url"])
 
 
 class SetupTests(unittest.TestCase):
