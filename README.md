@@ -4,10 +4,10 @@ Review code changes locally. Install Kensa, then let your agent run `kc`. It ope
 
 ## Install
 
-From a checkout of this repository:
+Paste this to Claude:
 
-```bash
-python3 bin/kc setup
+```text
+Setup Kensa from https://github.com/saykharng/kensa using command `python3 bin/kc setup`.
 ```
 
 This links `kc` into `~/.local/bin` and registers it with your agent. If that directory is not on your PATH, setup adds it in `~/.zshrc`. Open a new terminal after that. If another program is already named `kc`, setup leaves it alone.
