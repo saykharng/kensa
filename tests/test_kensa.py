@@ -25,7 +25,9 @@ from kensa.constants import (
 from kensa.diff import (
     align_panes,
     hunk_anchors,
+    hunks_match_file,
     old_lines_from_hunks,
+    pairs_from_hunks,
     parse_name_status_z,
     parse_unified_diff,
     render_document,
@@ -111,6 +113,43 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(pairs[2]["kind"], "add")
         self.assertIsNone(pairs[2]["oldText"])
         self.assertEqual(pairs[2]["newText"], "extra")
+
+    def test_pairs_from_hunks_lines_up_a_replacement_and_the_surrounding_file(self):
+        parsed = parse_unified_diff(SAMPLE_DIFF)
+        self.assertEqual(parsed[0]["hunks"][0]["old_start"], 1)
+        new_lines = ["def answer():", "    return 2", "    # end"]
+        self.assertTrue(hunks_match_file(new_lines, parsed[0]["hunks"]))
+        pairs = pairs_from_hunks(new_lines, parsed[0]["hunks"])
+        changed = [pair for pair in pairs if pair["kind"] == "change"]
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(changed[0]["oldText"], "    return 1")
+        self.assertEqual(changed[0]["newText"], "    return 2")
+        self.assertEqual(pairs[0]["kind"], "context")
+        self.assertEqual(pairs[0]["oldNum"], 1)
+        self.assertEqual(pairs[-1]["newText"], "    # end")
+        self.assertEqual(pairs[-1]["oldNum"], 3)
+
+    def test_pairs_from_hunks_keeps_lines_outside_the_hunk(self):
+        diff = """diff --git a/src/app.py b/src/app.py
+--- a/src/app.py
++++ b/src/app.py
+@@ -2,1 +2,2 @@
+-gone
++added
++extra
+"""
+        parsed = parse_unified_diff(diff)
+        new_lines = ["keep", "added", "extra", "tail"]
+        pairs = pairs_from_hunks(new_lines, parsed[0]["hunks"])
+        self.assertEqual(
+            [(pair["kind"], pair["oldText"], pair["newText"], pair["oldNum"], pair["newNum"]) for pair in pairs],
+            [
+                ("context", "keep", "keep", 1, 1),
+                ("change", "gone", "added", 2, 2),
+                ("add", None, "extra", None, 3),
+                ("context", "tail", "tail", 3, 4),
+            ],
+        )
 
     def test_old_lines_follow_the_hunk(self):
         parsed = parse_unified_diff(SAMPLE_DIFF)
@@ -237,6 +276,12 @@ class HttpTests(unittest.TestCase):
         opened = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
         self.assertIn("return 2", opened["content"])
         self.assertTrue(any(row["kind"] == "add" for row in opened["rows"]))
+        self.file.write_text("def answer():\n    return 9\n")
+        reread = self.get("/api/file?repo=%s&path=src/app.py" % self.repo)
+        self.assertIn("return 9", reread["content"])
+        moved = [pair for pair in reread["pairs"] if pair["newText"] == "    return 9"]
+        self.assertEqual(moved[0]["oldText"], "    return 1")
+        self.assertEqual(moved[0]["kind"], "change")
         self.assertTrue(any(item["text"] == "    return 1" for item in opened["deletions"]))
         changed = [pair for pair in opened["pairs"] if pair["oldText"] == "    return 1"]
         self.assertEqual(changed[0]["newText"], "    return 2")

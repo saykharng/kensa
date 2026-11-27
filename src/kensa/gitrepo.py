@@ -2,6 +2,8 @@
 
 import hashlib
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from kensa.constants import (
@@ -38,6 +40,33 @@ from kensa.paths import base_branch_name
 
 class RepoError(ValueError):
     pass
+
+
+_BINARY_PREFIX = 8192
+_SPAN_CACHE_SECONDS = 0.5
+_CACHE_LOCK = threading.Lock()
+_SPAN_CACHE = {}
+_SPAN_INFLIGHT = {}
+_STAMP_CACHE = {}
+_STAMP_INFLIGHT = {}
+
+
+class _SpanSlot:
+    def __init__(self):
+        self.event = threading.Event()
+        self.value = None
+        self.error = None
+
+    def succeed(self, value):
+        self.value = value
+        self.event.set()
+
+    def fail(self, error):
+        self.error = error
+        self.event.set()
+
+    def wait(self):
+        self.event.wait()
 
 
 def discover(start):
@@ -105,17 +134,25 @@ def file_blob(root, relative, status):
     return _decode_blob(full.read_bytes())
 
 
-def content_hash(root, relative, status):
+def blob_fingerprint(root, relative, status):
+    """Return (sha256, binary) from one read."""
     if status == "D":
-        text, binary = file_blob(root, relative, status)
-        payload = text if not binary else "binary"
-    else:
-        full = safe_path(root, relative)
-        if not full.is_file():
-            return ""
-        payload = hashlib.sha256(full.read_bytes()).hexdigest()
-        return payload
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        try:
+            text, binary = file_blob(root, relative, status)
+        except RepoError:
+            return "", False
+        payload = "binary" if binary else text
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest(), binary
+    full = safe_path(root, relative)
+    if not full.is_file():
+        return "", False
+    data = full.read_bytes()
+    return hashlib.sha256(data).hexdigest(), _is_binary_bytes(data)
+
+
+def content_hash(root, relative, status):
+    digest, _binary = blob_fingerprint(root, relative, status)
+    return digest
 
 
 def diff_hunks(root, relative, status, left=None, right=None):
@@ -151,6 +188,7 @@ def write_worktree_file(root, relative, content):
     temporary = full.with_name(full.name + ".kensa-tmp")
     temporary.write_bytes(encoded)
     temporary.replace(full)
+    _drop_repo_cache(root)
 
 
 def list_paths(root):
@@ -206,10 +244,14 @@ def _is_binary_change(root, relative, status):
     return binary
 
 
+def _is_binary_bytes(data):
+    return b"\0" in data[:_BINARY_PREFIX]
+
+
 def _decode_blob(data):
     if len(data) > MAX_FILE_BYTES:
         raise RepoError("file is too large to open in Kensa")
-    if b"\0" in data[:8192]:
+    if _is_binary_bytes(data):
         return "", True
     return data.decode("utf-8", errors="replace"), False
 
@@ -253,6 +295,16 @@ def comparison_ref(root):
 
 def worktree_span(root, commit=None, scope=None):
     """Review range for the working tree, including how the base was chosen."""
+    commit, scope = _normalize_scope(commit, scope)
+    return _cached_span(
+        root,
+        "worktree",
+        (commit or "", scope or ""),
+        lambda: _worktree_span(root, commit, scope),
+    )
+
+
+def _worktree_span(root, commit, scope):
     if not has_head(root):
         base = default_base(root)
         return _finish_span(
@@ -288,16 +340,26 @@ def branch_overview(root, name, base_name=None, commit=None, scope=None):
 
     base_name is a one-off comparison branch. Omit it to infer the base for this branch.
     """
-    resolved = resolve_branch(root, name)
+    commit, scope = _normalize_scope(commit, scope)
     if isinstance(base_name, str):
         base_name = base_name.strip()
+    resolved = resolve_branch(root, name)
+    tip = _git(root, ["rev-parse", resolved]).stdout.strip()
+    return _cached_span(
+        root,
+        "branch",
+        (name, base_name or "", commit or "", scope or "", resolved, tip),
+        lambda: _branch_overview(root, name, base_name, commit, scope, resolved, tip),
+    )
+
+
+def _branch_overview(root, name, base_name, commit, scope, resolved, tip):
     if base_name:
         base = resolve_branch(root, valid_base_branch(base_name))
         source = BASE_SOURCE_EXPLICIT
     else:
         base, source = choose_base(root, resolved, name)
     span = _build_span(root, resolved, base, source, name, commit, scope, worktree=False)
-    tip = _git(root, ["rev-parse", resolved]).stdout.strip()
     span["name"] = name
     span["resolved"] = resolved
     span["checkedOut"] = head_sha(root) == tip
@@ -750,6 +812,93 @@ def _valid_branch_name(name):
         return False
     forbidden = set(" \n\t~^:?*[\\")
     return not any(char in forbidden for char in name)
+
+
+def _repo_stamp(root):
+    """A cheap signature of HEAD, refs, and the worktree. Reused for a short moment."""
+    resolved = str(Path(root).resolve())
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _STAMP_CACHE.get(resolved)
+        if cached and now - cached[0] < _SPAN_CACHE_SECONDS:
+            return cached[1]
+        slot = _STAMP_INFLIGHT.get(resolved)
+        if slot is None:
+            slot = _SpanSlot()
+            _STAMP_INFLIGHT[resolved] = slot
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        slot.wait()
+        if slot.error:
+            raise slot.error
+        return slot.value
+    try:
+        stamp = _read_stamp(root)
+    except Exception as exc:
+        slot.fail(exc)
+        with _CACHE_LOCK:
+            _STAMP_INFLIGHT.pop(resolved, None)
+        raise
+    with _CACHE_LOCK:
+        _STAMP_CACHE[resolved] = (time.monotonic(), stamp)
+        _STAMP_INFLIGHT.pop(resolved, None)
+    slot.succeed(stamp)
+    return stamp
+
+
+def _read_stamp(root):
+    head = _git(root, ["rev-parse", "HEAD"], check=False).stdout
+    refs = _git(root, ["show-ref"], check=False).stdout
+    status = _git(root, ["status", "--porcelain", "-z"], check=False).stdout
+    return (head, refs, status)
+
+
+def _cached_span(root, kind, key, build):
+    stamp = _repo_stamp(root)
+    cache_key = (kind, str(Path(root).resolve()), key, stamp)
+    with _CACHE_LOCK:
+        cached = _SPAN_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        slot = _SPAN_INFLIGHT.get(cache_key)
+        if slot is None:
+            slot = _SpanSlot()
+            _SPAN_INFLIGHT[cache_key] = slot
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        slot.wait()
+        if slot.error:
+            raise slot.error
+        return dict(slot.value)
+    try:
+        value = build()
+    except Exception as exc:
+        slot.fail(exc)
+        with _CACHE_LOCK:
+            _SPAN_INFLIGHT.pop(cache_key, None)
+        raise
+    with _CACHE_LOCK:
+        _SPAN_CACHE[cache_key] = value
+        resolved = cache_key[1]
+        for item in list(_SPAN_CACHE):
+            if item[1] == resolved and item[3] != stamp:
+                _SPAN_CACHE.pop(item, None)
+        _SPAN_INFLIGHT.pop(cache_key, None)
+    slot.succeed(value)
+    return dict(value)
+
+
+def _drop_repo_cache(root):
+    resolved = str(Path(root).resolve())
+    with _CACHE_LOCK:
+        _STAMP_CACHE.pop(resolved, None)
+        for item in list(_SPAN_CACHE):
+            if item[1] == resolved:
+                _SPAN_CACHE.pop(item, None)
 
 
 def _git(cwd, args, check=True):

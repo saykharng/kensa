@@ -10,6 +10,7 @@ once it ships releases.
 
 ### Changed
 
+- Choosing a file in the review list opens it from memory. The list is read ahead, and the side-by-side view is built from the diff.
 - The install instructions are a prompt to paste into a coding agent. It names the repository and `python3 bin/kc setup`.
 - The review header shows the subject, the base, the merge-base, the commit count, and the file count.
 - The comparison base is chosen per branch. The upstream is used when it names a different branch. Otherwise the nearest of the saved branch, `develop`, `main`, `master`, and `trunk` is used. An explicit base still applies to that run only.

@@ -28,6 +28,8 @@ const SHOW_CHANGES = "Changes only";
 const PAIR_CONTEXT = "context";
 const LINE_HIDDEN = " line hidden";
 const LINES_HIDDEN = " lines hidden";
+const PREFETCH_LIMIT = 40;
+const PREFETCH_CONCURRENCY = 4;
 
 const state = {
   repo: "",
@@ -49,6 +51,13 @@ const state = {
   draft: null,
   branchMeta: null,
   fullFiles: {},
+  fileCache: {},
+  fileLoads: {},
+  prefetchQueue: [],
+  prefetchActive: 0,
+  openGeneration: 0,
+  pendingPath: "",
+  rangeToken: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -208,6 +217,7 @@ function renderCommitSelect(meta) {
 }
 
 async function refresh() {
+  noteRange();
   const snapQuery = state.branch ? repoQuery() : repoQuery() + rangeQuery();
   const snap = await api("/api/snapshot?" + snapQuery);
   state.hold = snap.hold;
@@ -222,6 +232,7 @@ async function refresh() {
   $("hold").classList.toggle("is-holding", state.hold);
   $("hold").setAttribute("aria-pressed", state.hold ? "true" : "false");
   renderSidebar();
+  prefetchReview();
   const signature = JSON.stringify({
     comments: state.comments,
     hunks: state.hunks,
@@ -260,7 +271,7 @@ function renderSidebar() {
   rows.forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = state.file && state.file.path === item.path ? "active" : "";
+    button.className = activePath() === item.path ? "active" : "";
     button.title = item.path;
     const count = state.comments.filter((comment) => comment.path === item.path).length;
     if (item.status) {
@@ -279,6 +290,9 @@ function renderSidebar() {
       mark.textContent = String(count);
       button.append(mark);
     }
+    button.addEventListener("pointerenter", () => {
+      loadFile(item.path).catch(() => {});
+    });
     button.addEventListener("click", () => {
       openPath(item.path, null, true).catch((error) => notice(error.message));
     });
@@ -288,18 +302,164 @@ function renderSidebar() {
   });
 }
 
+function reviewRows() {
+  return state.branch && state.branchMeta ? state.branchMeta.files : state.changes;
+}
+
+function activePath() {
+  return state.pendingPath || (state.file ? state.file.path : "");
+}
+
+function rangeToken() {
+  return [state.repo, state.branch, state.oneOffBase, state.commitChoice, state.scope].join("\0");
+}
+
+function noteRange() {
+  const token = rangeToken();
+  if (token === state.rangeToken) {
+    return;
+  }
+  state.rangeToken = token;
+  state.fileCache = {};
+  state.fileLoads = {};
+  state.prefetchQueue = [];
+}
+
+function fileCacheKey(path) {
+  return rangeToken() + "\0" + path;
+}
+
+function listedRow(path) {
+  return reviewRows().find((item) => item.path === path) || null;
+}
+
+function remembersFile(path) {
+  if (state.branch && state.branchMeta && state.branchMeta.checkedOut) {
+    return false;
+  }
+  return Boolean(listedRow(path));
+}
+
+function cachedFile(path) {
+  const key = fileCacheKey(path);
+  const entry = state.fileCache[key];
+  if (!entry) {
+    return null;
+  }
+  if (!remembersFile(path)) {
+    delete state.fileCache[key];
+    return null;
+  }
+  const row = listedRow(path);
+  if (row.hash && entry.hash && row.hash !== entry.hash) {
+    delete state.fileCache[key];
+    return null;
+  }
+  return entry.file;
+}
+
+function fileRequestUrl(path) {
+  const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
+  if (onBranch) {
+    return "/api/branch/file?" + branchQuery(path);
+  }
+  return "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path) + rangeQuery();
+}
+
+function loadFile(path) {
+  const key = fileCacheKey(path);
+  const cached = cachedFile(path);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+  const existing = state.fileLoads[key];
+  if (existing) {
+    return existing;
+  }
+  const pending = api(fileRequestUrl(path)).then((file) => {
+    if (remembersFile(path) && fileCacheKey(path) === key) {
+      state.fileCache[key] = { hash: file.hash || "", file: file };
+    }
+    return file;
+  }).finally(() => {
+    if (state.fileLoads[key] === pending) {
+      delete state.fileLoads[key];
+    }
+  });
+  state.fileLoads[key] = pending;
+  return pending;
+}
+
+function prefetchReview() {
+  if (state.branch && state.branchMeta && state.branchMeta.checkedOut) {
+    return;
+  }
+  const paths = reviewRows().map((item) => item.path).filter(Boolean);
+  const current = activePath();
+  const start = Math.max(paths.indexOf(current), 0);
+  const ordered = [];
+  for (let step = 0; step < paths.length && ordered.length < PREFETCH_LIMIT; step += 1) {
+    const path = paths[(start + step) % paths.length];
+    if (path && !ordered.includes(path)) {
+      ordered.push(path);
+    }
+  }
+  state.prefetchQueue = ordered.filter((path) => {
+    return path && !cachedFile(path) && !state.fileLoads[fileCacheKey(path)];
+  });
+  pumpPrefetch();
+}
+
+function pumpPrefetch() {
+  while (state.prefetchActive < PREFETCH_CONCURRENCY && state.prefetchQueue.length) {
+    const path = state.prefetchQueue.shift();
+    if (!path || cachedFile(path)) {
+      continue;
+    }
+    state.prefetchActive += 1;
+    loadFile(path).catch(() => {}).finally(() => {
+      state.prefetchActive -= 1;
+      pumpPrefetch();
+    });
+  }
+}
+
 async function openPath(path, line, push) {
+  const generation = state.openGeneration + 1;
+  state.openGeneration = generation;
   if (push && state.file) {
     state.stack.push({ path: state.file.path, line: state.selectedLine });
   }
   if (!state.file || state.file.path !== path) {
     state.draft = null;
   }
-  const onBranch = state.branch && state.branchMeta && state.branchMeta.files.some((item) => item.path === path);
-  const url = onBranch
-    ? "/api/branch/file?" + branchQuery(path)
-    : "/api/file?" + repoQuery() + "&path=" + encodeURIComponent(path) + rangeQuery();
-  state.file = await api(url);
+  const cached = cachedFile(path);
+  if (cached) {
+    showFile(cached, line);
+    return;
+  }
+  state.pendingPath = path;
+  $("file-bar").hidden = false;
+  $("file-path").textContent = path;
+  renderSidebar();
+  try {
+    const file = await loadFile(path);
+    if (generation !== state.openGeneration) {
+      return;
+    }
+    showFile(file, line);
+  } catch (error) {
+    if (generation === state.openGeneration) {
+      state.pendingPath = "";
+      renderSidebar();
+    }
+    throw error;
+  }
+}
+
+function showFile(file, line) {
+  state.pendingPath = "";
+  state.file = file;
   state.editing = false;
   state.dirty = false;
   state.selectedLine = line;
@@ -315,7 +475,7 @@ async function openPath(path, line, push) {
       node.scrollIntoView({ block: "center" });
     }
   }
-  loadOutline(path).catch(() => {});
+  loadOutline(file.path).catch(() => {});
 }
 
 async function loadOutline(path) {
@@ -937,6 +1097,9 @@ function bind() {
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = hit.path + ":" + hit.line + "  " + hit.text.trim();
+          button.addEventListener("pointerenter", () => {
+            loadFile(hit.path).catch(() => {});
+          });
           button.addEventListener("click", () => {
             results.replaceChildren();
             openPath(hit.path, hit.line, true).catch((error) => notice(error.message));
@@ -966,6 +1129,9 @@ function bind() {
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = path;
+          button.addEventListener("pointerenter", () => {
+            loadFile(path).catch(() => {});
+          });
           button.addEventListener("click", () => {
             search.value = "";
             results.replaceChildren();
@@ -1037,6 +1203,10 @@ function saveEditor() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ repo: state.repo, path: state.file.path, content: $("editor").value }),
   }).then((file) => {
+    const key = fileCacheKey(file.path);
+    if (remembersFile(file.path)) {
+      state.fileCache[key] = { hash: file.hash || "", file: file };
+    }
     state.file = file;
     state.editing = false;
     state.dirty = false;

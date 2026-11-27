@@ -14,13 +14,22 @@ from kensa.comments import (
     set_hunk,
 )
 from kensa.constants import FILE_SEARCH_LIMIT, GREP_READ_LIMIT, JUMP_LIMIT, SCOPE_ALL
-from kensa.diff import align_panes, hunk_anchors, old_lines_from_hunks, render_document
+from kensa.diff import (
+    align_panes,
+    hunk_anchors,
+    hunks_match_file,
+    old_lines_from_hunks,
+    pairs_added,
+    pairs_deleted,
+    pairs_from_hunks,
+    pairs_unchanged,
+    render_document,
+)
 from kensa.gitrepo import (
     RepoError,
+    blob_fingerprint,
     branch_hunks,
     branch_overview,
-    changed_files,
-    content_hash,
     diff_hunks,
     discover,
     ensure_notes_ignored,
@@ -48,10 +57,10 @@ def snapshot(root, commit=None, scope=None):
     for change in span["files"]:
         item = dict(change)
         try:
-            item["hash"] = content_hash(root, change["path"], change["status"])
+            item["hash"], item["binary"] = blob_fingerprint(root, change["path"], change["status"])
         except RepoError:
             item["hash"] = ""
-        item["binary"] = _binary_flag(root, change["path"], change["status"])
+            item["binary"] = False
         changes.append(item)
     payload = {
         "repo": str(root.resolve()),
@@ -114,7 +123,7 @@ def open_file(root, relative, commit=None, scope=None):
         "hash": digest,
         "rows": rows,
         "deletions": deletions,
-        "pairs": _pairs(root, relative, status, text, binary, old_path, span["pairRef"]),
+        "pairs": _pairs(root, relative, status, text, binary, old_path, span["pairRef"], hunks),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
     }
@@ -188,10 +197,16 @@ def search_files(root, query):
 
 
 def file_outline(root, relative):
-    opened = open_file(root, relative)
-    if opened["binary"]:
+    """Declarations in the working tree file. A deleted file is read from git."""
+    root = Path(root)
+    safe_path(root, relative)
+    try:
+        text, binary = file_blob(root, relative, "M")
+    except RepoError:
+        text, binary = file_blob(root, relative, "D")
+    if binary:
         return []
-    return outline(opened["content"])
+    return outline(text)
 
 
 def jump(root, symbol):
@@ -268,6 +283,7 @@ def open_branch_file(root, name, relative, base_name=None, commit=None, scope=No
             binary,
             known.get("oldPath"),
             overview["pairRef"] if commit_view else overview["base"],
+            hunks,
         ),
         "anchors": hunk_anchors(hunks),
         "comments": placed,
@@ -340,19 +356,25 @@ def agent_view(root):
     }
 
 
-def _pairs(root, relative, status, text, binary, old_path, ref):
-    """Aligned old and new lines. Context shows the same text on both sides."""
+def _pairs(root, relative, status, text, binary, old_path, ref, hunks):
+    """Aligned old and new lines. Context shows the same text on both sides.
+
+    A matching diff is walked directly. The previous blob is read only when
+    the hunks do not describe this file.
+    """
     if binary:
         return []
+    lines = text.splitlines()
     if status == "D":
-        return align_panes(text.splitlines(), [])
+        return pairs_deleted(lines)
     if status == "A":
-        return align_panes([], text.splitlines())
-    if status == "context":
-        lines = text.splitlines()
-        return align_panes(lines, lines)
+        return pairs_added(lines)
+    if status == "context" or not hunks:
+        return pairs_unchanged(lines)
+    if hunks_match_file(lines, hunks):
+        return pairs_from_hunks(lines, hunks)
     previous = _previous_blob(root, ref, old_path or relative)
-    return align_panes(previous.splitlines(), text.splitlines())
+    return align_panes(previous.splitlines(), lines)
 
 
 def _previous_blob(root, ref, relative):
@@ -369,10 +391,15 @@ def _pull_pairs(lines, binary, loaded):
     if binary:
         return []
     if loaded.get("newPath") is None:
-        return align_panes(lines, [])
+        return pairs_deleted(lines)
     if not loaded.get("oldPath"):
-        return align_panes([], lines)
-    previous = old_lines_from_hunks(lines, loaded["hunks"])
+        return pairs_added(lines)
+    hunks = loaded.get("hunks") or []
+    if not hunks:
+        return pairs_unchanged(lines)
+    if hunks_match_file(lines, hunks):
+        return pairs_from_hunks(lines, hunks)
+    previous = old_lines_from_hunks(lines, hunks)
     return align_panes(previous, lines)
 
 
@@ -427,14 +454,6 @@ def _range_payload(span):
     }
 
 
-def _binary_flag(root, relative, status):
-    try:
-        _, binary = file_blob(root, relative, status)
-    except RepoError:
-        return False
-    return binary
-
-
 def _state(root):
     ensure_notes_ignored(root)
     return load_state(comments_path(root))
@@ -460,7 +479,7 @@ def _text(root, relative, status):
 
 def _place_all(root, state):
     cache = {}
-    changes = {item["path"]: item for item in changed_files(root, scope=SCOPE_ALL)}
+    changes = {item["path"]: item for item in worktree_span(root, scope=SCOPE_ALL)["files"]}
     placed = []
     for comment in state.get("comments") or []:
         path = comment.get("path")

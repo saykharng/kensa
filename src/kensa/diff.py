@@ -88,6 +88,7 @@ def parse_unified_diff(text):
             new_line = int(match.group(2))
             hunk = {
                 "header": line,
+                "old_start": old_line,
                 "new_start": new_line,
                 "lines": [],
             }
@@ -211,6 +212,115 @@ def align_panes(old_lines, new_lines):
                     kind,
                 )
             )
+    return pairs
+
+
+def pairs_unchanged(lines):
+    """Both panes show the same file. Used for context and for an unchanged file."""
+    return [_pair(index, text, index, text, "context") for index, text in enumerate(lines)]
+
+
+def pairs_added(lines):
+    return [_pair(None, None, index, text, "add") for index, text in enumerate(lines)]
+
+
+def pairs_deleted(lines):
+    return [_pair(index, text, None, None, "del") for index, text in enumerate(lines)]
+
+
+def hunks_match_file(new_lines, hunks):
+    """True when every added or kept line in the diff is that line of the file."""
+    if not hunks:
+        return True
+    limit = len(new_lines)
+    for hunk in hunks:
+        for item in hunk["lines"]:
+            if item["type"] == "del":
+                continue
+            number = item.get("new_line") or 0
+            if number < 1 or number > limit or new_lines[number - 1] != item["text"]:
+                return False
+    return True
+
+
+def pairs_from_hunks(new_lines, hunks):
+    """Side-by-side pairs from a unified diff and the new file.
+
+    Lines outside a hunk are copied from the new file. A run of deletions
+    followed by additions is one replacement, and the shorter side stays blank.
+    """
+    pairs = []
+    new_index = 0
+    old_num = 1
+    total = len(new_lines)
+    for hunk in hunks:
+        new_start = hunk.get("new_start") or 1
+        if new_start < 1:
+            new_start = 1
+        target = new_start - 1
+        if target > total:
+            target = total
+        while new_index < target:
+            text = new_lines[new_index]
+            pairs.append(_pair(old_num - 1, text, new_index, text, "context"))
+            old_num += 1
+            new_index += 1
+        old_start = hunk.get("old_start") or 0
+        if old_start > 0:
+            old_num = old_start
+        pending_dels = []
+        pending_adds = []
+
+        def flush():
+            nonlocal old_num, new_index, pending_dels, pending_adds
+            if not pending_dels and not pending_adds:
+                return
+            count = max(len(pending_dels), len(pending_adds))
+            for offset in range(count):
+                has_old = offset < len(pending_dels)
+                has_new = offset < len(pending_adds)
+                if has_old and has_new:
+                    kind = "change"
+                elif has_old:
+                    kind = "del"
+                else:
+                    kind = "add"
+                pairs.append(
+                    _pair(
+                        old_num - 1 + offset if has_old else None,
+                        pending_dels[offset] if has_old else None,
+                        new_index + offset if has_new else None,
+                        pending_adds[offset] if has_new else None,
+                        kind,
+                    )
+                )
+            old_num += len(pending_dels)
+            new_index += len(pending_adds)
+            pending_dels = []
+            pending_adds = []
+
+        for item in hunk["lines"]:
+            kind = item["type"]
+            if kind == "del":
+                if pending_adds:
+                    flush()
+                pending_dels.append(item["text"])
+                continue
+            if kind == "add":
+                pending_adds.append(item["text"])
+                continue
+            if kind == "context":
+                flush()
+                text = new_lines[new_index] if new_index < total else item["text"]
+                pairs.append(_pair(old_num - 1, text, new_index, text, "context"))
+                old_num += 1
+                new_index += 1
+        flush()
+    while new_index < total:
+        text = new_lines[new_index]
+        pairs.append(_pair(old_num - 1, text, new_index, text, "context"))
+        old_num += 1
+        new_index += 1
     return pairs
 
 
